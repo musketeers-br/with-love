@@ -8,6 +8,38 @@
       <Packaging>module</Packaging>
       <SourcesRoot>src</SourcesRoot>
       <Resource Name="dc.withLove.PKG"/>
+      <WebApplication 
+        Name="/withlove/api" 
+        NameSpace="{$namespace}"
+        Path="/src"
+        Recurse="1"
+        Directory="{$cspdir}/csp/withlove/api" 
+        MatchRoles=":%All"
+        AutheEnabled="#{$$$AutheCache + $$$AutheUnauthenticated}"
+        DispatchClass="dc.withlove.service.Dispatch" 
+        ServeFiles="1"
+        CookiePath="/csp/withlove/api"
+        UseCookies="2"
+      />
+
+      <WebApplication 
+        Name="/withlove"
+        Url="/withlove"
+        NameSpace="${namespace}"
+        Description="Frontend With Love"
+        Path="${cspdir}/csp/${namespace}"
+        
+        ServeFiles="2"
+        Recurse="1"
+        ServeFilesTimeout="3600"
+        
+        CookiePath="/withlove/"
+        UseSessionCookie="2"
+        DefaultTimeout="900"
+        
+        MatchRoles=":${globalsDbRole}"
+        AutheEnabled="#{$$$AutheUnauthenticated}"
+      />
     </Module>
   </Document>
 </Export>
