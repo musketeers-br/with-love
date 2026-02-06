@@ -6,7 +6,7 @@ Parameter CONTENTTYPE = "application/json";
 XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 {
 <Routes>
-    <Route Url="/generate-app" Method="POST" Call="GenerateApp"/>
+    <Route Url="/agent/chat" Method="POST" Call="AgentChat"/>
     <Route Url="/deploy-app" Method="POST" Call="DeployApp"/>
     <Route Url="/generate-fhir" Method="POST" Call="GenerateFHIR"/>
 
@@ -32,26 +32,23 @@ ClassMethod GetTenant() As %String
     Return tTenant
 }
 
-ClassMethod GenerateApp() As %Status
+/// Endpoint: Conversational Agent (LangGraph-lite)
+ClassMethod AgentChat() As %Status
 {
     Try {
         Set tApiKey = ..GetAPIKey()
-        
-        // CORREÇÃO: Usando Return e Blocos para evitar erro de compilação
-        If tApiKey="" {
-            Write {"error":"Missing Authorization Header"}.%ToJSON()
-            Return $$$OK
-        }
+        If tApiKey="" { Write {"error":"Missing API Key"}.%ToJSON() Return $$$OK }
 
         Set tPayload = {}.%FromJSON(%request.Content)
         Set tPrompt = tPayload.prompt
+        Set tSessionId = tPayload.sessionId
+        Set tTenantId = "hospital-main" // In prod get from header
         Set tModel = tPayload.model
-        If tModel="" Set tModel = "gpt-4o"
 
-        // Chama a Engine GenAI
-        Set tHtml = ##class(dc.withLove.engine.GenAi).Generate(tPrompt, tApiKey, tModel)
+        // Call Agent
+        Set tResult = ##class(dc.withLove.engine.GenAi).AgentRun(tSessionId, tTenantId, tPrompt, tApiKey, tModel)
         
-        Write { "html": (tHtml) }.%ToJSON()
+        Write tResult.%ToJSON()
 
     } Catch ex {
         Write {"error": (ex.DisplayString())}.%ToJSON()
@@ -59,18 +56,22 @@ ClassMethod GenerateApp() As %Status
     Return $$$OK
 }
 
+/// Endpoint: Deploy (Compilation)
+/// FIXED: Removed any potential raw "Write" calls that caused the SyntaxError
 ClassMethod DeployApp() As %Status
 {
     Try {
+        Set tApiKey = ..GetAPIKey()
+        If tApiKey="" { Write {"error":"Missing API Key"}.%ToJSON() Return $$$OK }
+        
         Set tPayload = {}.%FromJSON(%request.Content)
         
-        Set tTenant = ..GetTenant()
+        Set tTenant = "hospital-main"
         Set tName = tPayload.appName
         Set tHtml = tPayload.html
-        Set tPrompt = tPayload.prompt
-        Set tModel = tPayload.model
+        Set tPrompt = "Deployed via API"
+        Set tModel = "manual"
         
-        // Chama a AppFactory
         Set tUrl = ##class(dc.withLove.engine.AppFactory).CreateApp(tTenant, tName, tHtml, tPrompt, tModel)
         
         If $Extract(tUrl,1,5)="ERROR" {
@@ -80,7 +81,8 @@ ClassMethod DeployApp() As %Status
         }
 
     } Catch ex {
-        Write {"error": (ex.DisplayString())}.%ToJSON()
+        // This catches the 'Compilação...' error if it was an exception and formats it as JSON
+        Write {"error": ("Exception: " _ ex.DisplayString())}.%ToJSON()
     }
     Return $$$OK
 }

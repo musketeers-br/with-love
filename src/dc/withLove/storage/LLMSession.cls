@@ -1,19 +1,50 @@
 Class dc.withLove.storage.LLMSession Extends %Persistent
 {
 
-Property sessionId As %String(MAXLEN = 128) [ Required ];
+Property SessionId As %String(MAXLEN = 128) [ Required ];
 
-Property projectId As %String(MAXLEN = 128);
+Property TenantId As %String(MAXLEN = 128);
 
-Property conversationHistory As %String(MAXLEN = "");
+/// JSON Array of messages: [{"role":"user", "content":"..."}, {"role":"assistant", "content":"..."}]
+Property History As %Stream.GlobalCharacter;
 
-Property currentState As %String(MAXLEN = 64);
+/// Current State of the Agent (e.g., "GATHERING_REQS", "CODING", "REVIEW")
+Property CurrentState As %String [ InitialExpression = "GATHERING_REQS" ];
 
-Property pendingApproval As %Boolean [ InitialExpression = 0 ];
+Property CreatedAt As %DateTime [ InitialExpression = {$ZDateTime($Horolog, 3)} ];
 
-Property createdAt As %TimeStamp [ Required ];
+Index SessionIdx On (TenantId, SessionId) [ Unique ];
 
-Index SessionIdx On sessionId [ Unique ];
+/// Helper to append a message
+Method AddMessage(pRole As %String, pContent As %String) As %Status
+{
+    Set tSC = $$$OK
+    Try {
+        // Load current history or init array
+        Set tJson = []
+        If ..History.Size > 0 {
+            Set tJson = {}.%FromJSON(..History)
+        }
+        
+        // Push new message
+        Do tJson.%Push({ "role": (pRole), "content": (pContent) })
+        
+        // Save back to stream
+        Do ..History.Clear()
+        Do ..History.Write(tJson.%ToJSON())
+        Set tSC = ..%Save()
+    } Catch ex {
+        Set tSC = ex.AsStatus()
+    }
+    Return tSC
+}
+
+/// Helper to get history as dynamic object
+Method GetHistory() As %DynamicArray
+{
+    If ..History.Size = 0 Return []
+    Return {}.%FromJSON(..History)
+}
 
 Storage Default
 {
@@ -22,22 +53,19 @@ Storage Default
 <Value>%%CLASSNAME</Value>
 </Value>
 <Value name="2">
-<Value>sessionId</Value>
+<Value>SessionId</Value>
 </Value>
 <Value name="3">
-<Value>projectId</Value>
+<Value>TenantId</Value>
 </Value>
 <Value name="4">
-<Value>conversationHistory</Value>
+<Value>History</Value>
 </Value>
 <Value name="5">
-<Value>currentState</Value>
+<Value>CurrentState</Value>
 </Value>
 <Value name="6">
-<Value>pendingApproval</Value>
-</Value>
-<Value name="7">
-<Value>createdAt</Value>
+<Value>CreatedAt</Value>
 </Value>
 </Data>
 <DataLocation>^dc.withLove.stoA0CD.LLMSessionD</DataLocation>

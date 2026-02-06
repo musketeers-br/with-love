@@ -10,8 +10,7 @@ Property Title As %String(MAXLEN = 255);
 Property Content As %String(MAXLEN = "");
 
 /// IRIS Native Vector Storage (requires IRIS 2024.1+)
-/// Vetor 384 dimensões (all-MiniLM-L6-v2)
-/// DATATYPE = "DECIMAL" é importante para cálculos precisos
+/// Vetor 384 dimensions (all-MiniLM-L6-v2)
 Property Embedding As %Vector(DATATYPE = "DECIMAL", LEN = 384);
 
 Index TenantIdx On TenantID;
