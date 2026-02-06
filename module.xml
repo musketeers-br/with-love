@@ -16,7 +16,7 @@
         Directory="{$cspdir}/csp/withlove/api" 
         MatchRoles=":%All"
         AutheEnabled="#{$$$AutheCache + $$$AutheUnauthenticated}"
-        DispatchClass="dc.withlove.service.Dispatch" 
+        DispatchClass="dc.withLove.service.Dispatch" 
         ServeFiles="1"
         CookiePath="/csp/withlove/api"
         UseCookies="2"
