@@ -81,7 +81,6 @@
             </div>
         </section>
     </main>
-
     <script>
         function app() {
             return {
@@ -92,61 +91,47 @@
 
                 get highlightedJson() {
                     if(!this.result) return '<div class="h-full flex flex-col items-center justify-center text-slate-600 gap-2"><svg class="w-12 h-12 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg><span>Waiting for integration...</span></div>';
-                    return hljs.highlight(JSON.stringify(this.result, null, 2), {language: 'json'}).value;
+                    // Check if hljs exists to avoid race condition errors
+                    if (typeof hljs !== 'undefined') {
+                        return hljs.highlight(JSON.stringify(this.result, null, 2), {language: 'json'}).value;
+                    }
+                    return JSON.stringify(this.result, null, 2);
                 },
 
-                generateSDA() {
-                    // SIMULAÇÃO DA IA: Este XML seria gerado pelo Gemini no futuro
-                    // O importante aqui é mostrar que o formato SDA é o intermediário
-                    this.sdaXml = `<Container>
-<Patient>
-<Name><FamilyName>Garcia</FamilyName><GivenName>Maria</GivenName></Name>
-<Gender><Code>F</Code></Gender>
-<BirthTime>19850412</BirthTime>
-</Patient>
-<Encounters>
-<Encounter>
-    <Description>Primary Care Visit</Description>
-    <Diagnoses>
-    <Diagnosis>
-        <DiagnosisCode><Code>E11.9</Code><Description>Type 2 diabetes mellitus without complications</Description></DiagnosisCode>
-    </Diagnosis>
-    </Diagnoses>
-</Encounter>
-</Encounters>
-<Medications>
-<Medication>
-    <DrugName>Metformin 500mg</DrugName>
-</Medication>
-</Medications>
-</Container>`;
+                async generateSDA() {
+                    try {
+                        const res = await fetch('/withlove/api/simulate-ai', { method: 'POST' });
+                        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                        const data = await res.json();
+                        this.sdaXml = data.sda;
+                    } catch (e) {
+                        console.error(e);
+                        this.sdaXml = '<Container></Container>'; 
+                    }
                 },
 
                 async processInIris() {
                     this.loading = true;
-                    this.result = null;
                     try {
-                        const res = await fetch('/api/withlove/process-sda', {
+                        const res = await fetch('/withlove/api/process-sda', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/xml'},
                             body: this.sdaXml
                         });
                         
-                        if (!res.ok) throw new Error(res.statusText);
+                        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
                         this.result = await res.json();
-                        
                     } catch(e) {
                         alert('Integration Error: ' + e);
-                        this.result = { error: e.toString() };
+                        console.error(e);
                     } finally {
                         this.loading = false;
                     }
                 }
-            }
-        }
+            } 
+        } 
     </script>
     <style>
-        /* Custom Scrollbar */
         .custom-scrollbar::-webkit-scrollbar { width: 10px; height: 10px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: #0f172a; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #334155; border-radius: 5px; border: 2px solid #0f172a; }
