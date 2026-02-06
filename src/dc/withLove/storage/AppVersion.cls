@@ -3,16 +3,16 @@ Class dc.withLove.storage.AppVersion Extends %Persistent
 
 Relationship Project As dc.withLove.storage.Project [ Cardinality = parent, Inverse = Versions ];
 
-/// Número da versão (1, 2, 3...)
 Property VersionNumber As %Integer [ Required ];
 
-/// O Prompt que gerou esta versão ("Adicione campo de CPF...")
 Property PromptUsed As %String(MAXLEN = "");
 
-/// O HTML/CSP gerado pela IA (Snapshot do código)
+/// Snapshot of the code
 Property SourceCode As %Stream.GlobalCharacter;
 
-/// Data desta versão
+/// Model used (e.g., gpt-4o, claude-3-5-sonnet)
+Property LLMModel As %String;
+
 Property CreatedAt As %DateTime [ InitialExpression = {$ZDateTime($Horolog, 3)} ];
 
 Index VersionIdx On (Project, VersionNumber) [ Unique ];
@@ -34,6 +34,9 @@ Storage Default
 </Value>
 <Value name="5">
 <Value>CreatedAt</Value>
+</Value>
+<Value name="6">
+<Value>LLMModel</Value>
 </Value>
 </Data>
 <DataLocation>{%%PARENT}("Versions")</DataLocation>

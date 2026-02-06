@@ -1,30 +1,28 @@
 Class dc.withLove.storage.Project Extends %Persistent
 {
 
-/// Nome amigável (ex: "Triagem Dengue")
+/// Multi-Tenant Isolation
+Property TenantID As %String [ Required ];
+
 Property Name As %String [ Required ];
 
-/// Nome técnico da classe gerada (ex: "DengueTriage")
 Property CodeName As %String [ Required ];
 
-/// Descrição do que o app faz
 Property Description As %String(MAXLEN = "");
 
-/// Quem criou (Tenant/Usuário)
 Property Owner As %String;
 
-/// Data de criação
 Property CreatedAt As %DateTime [ InitialExpression = {$ZDateTime($Horolog, 3)} ];
 
-/// Última versão implantada
+/// Optional: Store project-specific API Key (Encrypted)
+Property EncryptedAPIKey As %String(MAXLEN = 512);
+
 Property CurrentVersion As %Integer [ InitialExpression = 0 ];
 
-/// Relacionamento com as versões do código
 Relationship Versions As dc.withLove.storage.AppVersion [ Cardinality = children, Inverse = Project ];
 
-Index NameIdx On Name [ Unique ];
-
-Index CodeNameIdx On CodeName [ Unique ];
+/// Unique index per Tenant
+Index TenantIdx On (TenantID, CodeName) [ Unique ];
 
 Storage Default
 {
@@ -49,6 +47,12 @@ Storage Default
 </Value>
 <Value name="7">
 <Value>CurrentVersion</Value>
+</Value>
+<Value name="8">
+<Value>TenantID</Value>
+</Value>
+<Value name="9">
+<Value>EncryptedAPIKey</Value>
 </Value>
 </Data>
 <DataLocation>^dc.withLove.storage.ProjectD</DataLocation>
