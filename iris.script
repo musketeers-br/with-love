@@ -23,5 +23,7 @@
     // Configure %UnitTest in IRISAPP to suit the VS Code extension
     set ^UnitTestRoot="/usr/irissys/.vscode/IRISAPP/UnitTestRoot"
 
+    zpm "install fhir-server"
+
     zpm "load /home/irisowner/dev/ -v":1:1
     halt
