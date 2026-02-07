@@ -45,7 +45,7 @@ Parameter APIPROMPT = {"You are the API Agent. Generate an InterSystems IRIS RES
 Parameter INTEROPPROMPT = {"You are the Interoperability Agent. Generate InterSystems IRIS Interoperability components."_
     "RULES:"_
     "1. For Data Transformations, generate a Class extending 'Ens.DataTransformDTL'."_
-    "2. CRITICAL: For DTLs, include the <XData name='DTL'> block with proper XML namespace."_
+    "2. CRITICAL: In the <transform> tag, ALWAYS include: xmlns:xsi='[http://www.w3.org/2001/XMLSchema-instance](http://www.w3.org/2001/XMLSchema-instance)'."_
     "3. For Operations, generate a Class extending 'Ens.BusinessOperation' with MessageMap."_
     "4. Use package 'dc.withLove.interop' (system will adjust tenant)."_
     "5. Output ONLY the ObjectScript code."};

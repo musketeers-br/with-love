@@ -9,10 +9,13 @@ ClassMethod DeployComponent(pSourceCode As %String, pTenantId As %String) As %St
     Try {
         // 1. Sanitization
         Set pSourceCode = $Replace(pSourceCode, "```objectscript", "")
-        Set pSourceCode = $Replace(pSourceCode, "```xml", "") // AI often confuses DTL with XML
+        Set pSourceCode = $Replace(pSourceCode, "```xml", "") 
         Set pSourceCode = $Replace(pSourceCode, "```", "")
         
-        // 2. Extract Class Name
+        If (pSourceCode [ "<transform") && (pSourceCode '[ "xmlns:xsi") {
+            Set pSourceCode = $Replace(pSourceCode, "<transform", "<transform xmlns:xsi=""[http://www.w3.org/2001/XMLSchema-instance](http://www.w3.org/2001/XMLSchema-instance)""")
+        }
+
         Set tMatcher = ##class(%Regex.Matcher).%New("Class\s+([\w\.]+)\s+Extends")
         Set tMatcher.Text = pSourceCode
         If 'tMatcher.Locate() Throw ##class(%Exception.General).%New("Parser", 500, , "Could not identify Class Name.")
