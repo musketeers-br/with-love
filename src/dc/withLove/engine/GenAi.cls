@@ -209,15 +209,13 @@ ClassMethod RetrieveContext(pTenantId As %String, pVectorStr As %String) As %Str
     Try {
         Set tVector = $ZConvert(pVectorStr, "I", "JSON")
         
-        Set tQuery = "SELECT TOP 3 Title, Content FROM dc_withLove_storage.KnowledgeBase " _
-                "WHERE TenantID = ? " _
-                "ORDER BY VECTOR_DOT_PRODUCT(Embedding, TO_VECTOR(?, DECIMAL)) DESC"
-
-        Set tRS = ##class(%SQL.Statement).%ExecDirect(, tQuery, pTenantId, tVector)
+        Set statement = ##class(%SQL.Statement).%New()
+        $$$ThrowOnError(statement.%PrepareClassQuery("dc.withLove.storage.KnowledgeBase", "RetrieveContext"))
+        Set tRS = statement.%Execute(pTenantId, tVector)
         
         While tRS.%Next() {
-            Set tContext = tContext _ "Document: " _ tRS.Title _ $C(10) _ 
-                "Content: " _ $Extract(tRS.Content, 1, 1000) _ "..." _ $C(10,10)
+            Set tContext = tContext _ "Document: " _ tRS.%Get("Title") _ $C(10) _ 
+                "Content: " _ $Extract(tRS.%Get("Content"), 1, 1000) _ "..." _ $C(10,10)
         }
     } Catch ex {
         Set tContext = "Error retrieving context: " _ ex.DisplayString()

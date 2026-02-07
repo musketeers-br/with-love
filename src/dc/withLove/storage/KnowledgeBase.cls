@@ -15,6 +15,13 @@ Property Embedding As %Vector(DATATYPE = "DECIMAL", LEN = 384);
 
 Index TenantIdx On TenantID;
 
+Query RetrieveContext(pTenantId As %String, pVectorStr As %String) As %SQLQuery(COMPILEMODE = "IMMEDIATE", ROWSPEC = "Title:%String, Content:%String", SELECTMODE = "RUNTIME") [ SqlProc ]
+{
+    SELECT TOP 3 Title, Content FROM dc_withLove_storage.KnowledgeBase
+    WHERE TenantID = :pTenantId
+    ORDER BY VECTOR_DOT_PRODUCT(Embedding, TO_VECTOR(:pVectorStr, DECIMAL)) DESC
+}
+
 Storage Default
 {
 <Data name="KnowledgeBaseDefaultData">

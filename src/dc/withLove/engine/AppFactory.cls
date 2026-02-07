@@ -16,8 +16,12 @@ ClassMethod CreateApp(pTenantId As %String, pAppName As %String, pHtmlContent As
         If tCleanTenant="" Set tCleanTenant = "default"
         
         // --- 2. STORAGE ---
-        Set tProjId = ""
-        &sql(SELECT ID INTO :tProjId FROM dc_withLove_storage.Project WHERE TenantID = :pTenantId AND CodeName = :tCleanName)
+
+        Set statement = ##class(%SQL.Statement).%New()
+        $$$ThrowOnError(statement.%PrepareClassQuery("dc.withLove.storage.Project", "GetProjectId"))
+        Set tRS = statement.%Execute(pTenantId, tCleanName)
+        Do tRS.%Next()
+        Set tProjId = tRS.%Get("ProjId")
         
         If (tProjId = "") {
             Set tProj = ##class(dc.withLove.storage.Project).%New()

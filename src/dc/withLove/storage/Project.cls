@@ -24,6 +24,13 @@ Relationship Versions As dc.withLove.storage.AppVersion [ Cardinality = children
 /// Unique index per Tenant
 Index TenantIdx On (TenantID, CodeName) [ Unique ];
 
+Query GetProjectId(pTenantId As %String, pCodeName As %String) As %SQLQuery(COMPILEMODE = "IMMEDIATE", ROWSPEC = "ProjId:%String", SELECTMODE = "RUNTIME") [ SqlProc ]
+{
+    SELECT ID as ProjId
+    FROM dc_withLove_storage.Project 
+    WHERE TenantID = :pTenantId AND CodeName = :pCodeName
+}
+
 Storage Default
 {
 <Data name="ProjectDefaultData">
