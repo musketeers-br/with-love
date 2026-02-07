@@ -14,8 +14,14 @@ Parameter UIPROMPT = {"You are the UI Agent. Generate the HTML code for the requ
     "Output ONLY the raw HTML inside <body>."};
 
 /// Backend Agent Prompt: Specialist in IRIS Persistent Classes
+/// Updated for Multi-Tenancy and Safe Compilation
 Parameter BACKENDPROMPT = {"You are the Backend Agent. Generate an InterSystems IRIS Persistent Class."_
-    "Output ONLY the ObjectScript code."};
+    "RULES:"_
+    "1. Define the class name simply (e.g., 'Patient'). The system will auto-assign the package based on the Tenant."_
+    "2. Inherit from (%Persistent, %JSON.Adaptor)."_
+    "3. Use simple types: %String, %Integer, %Boolean, %Date."_
+    "4. CRITICAL: DO NOT generate the <Storage> XML block. The compiler will generate it automatically."_
+    "5. Output ONLY the ObjectScript code. No markdown formatting."};
 
 /// FHIR Agent Prompt: Specialist in Interoperability (Generation)
 Parameter FHIRPROMPT = {"You are the FHIR Agent. Generate a FHIR R4 Bundle JSON based on the request."_
@@ -32,7 +38,7 @@ Parameter SUPERVISORPROMPT = {"You are the Supervisor of a Hospital Software Tea
     "Available Workers: [UI AGENT], [BACKEND AGENT], [FHIR AGENT], [INTEGRATION AGENT]."_
     "Response Format:"_
     "- If user wants an App Interface: '[DELEGATE: UI] <instructions>'"_
-    "- If user wants a Database Class: '[DELEGATE: BACKEND] <instructions>'"_
+    "- If user wants a Database Class (Table): '[DELEGATE: BACKEND] <instructions>'"_
     "- If user wants FHIR Data generated: '[DELEGATE: FHIR] <instructions>'"_
     "- If user wants to IMPORT/CONVERT FHIR data (e.g. 'save this patient', 'import json'): '[DELEGATE: INTEGRATION] <json_content>'"_
     "- If general chat: Just answer."};
@@ -44,7 +50,6 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
     Set tResponse = { "type": "text", "content": "" }
     
     Try {
-        // 1. Load Session (Short-Term Memory)
         Set tSession = ##class(dc.withLove.storage.LLMSession).SessionIdxOpen(pTenantId, pSessionId)
         If '$IsObject(tSession) {
             Set tSession = ##class(dc.withLove.storage.LLMSession).%New()
@@ -52,14 +57,9 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
             Set tSession.TenantId = pTenantId
         }
         
-        // 2. Add User Input to History
         Do tSession.AddMessage("user", pUserPrompt)
-        
-        // 3. Supervisor Step (Decision Node)
         Set tHistory = tSession.GetHistory()
         Set tDecision = ..PyCallLLM(tHistory.%ToJSON(), pApiKey, pModel, ..#SUPERVISORPROMPT)
-        
-        // 4. Graph Routing Logic
         
         If (tDecision [ "[DELEGATE: UI]") {
             // ---> NODE: UI AGENT
@@ -77,10 +77,20 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
             Set tInstructions = $Piece(tDecision, "[DELEGATE: BACKEND]", 2)
             Set tCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#BACKENDPROMPT)
             
-            Set tResponse.type = "text"
-            Set tResponse.content = "```objectscript" _ $C(10) _ tCode _ $C(10) _ "```"
+            // Call ClassFactory with Tenant Context
+            Set tDeployResult = ##class(dc.withLove.engine.ClassFactory).DeployBackend(tCode, pTenantId)
             
-            Do tSession.AddMessage("assistant", tResponse.content)
+            If ($Extract(tDeployResult,1,5) = "ERROR") {
+                Set tResponse.content = "❌ **Backend Build Failed**" _ $C(10) _ tDeployResult
+            } Else {
+                Set tResponse.content = "✅ **Database Table Created!**" _ $C(10,10) _ 
+                                        "Table: `" _ tDeployResult _ "`" _ $C(10) _
+                                        "SQL: `SELECT * FROM " _ tDeployResult _ "`" _ $C(10,10) _
+                                        "```objectscript" _ $C(10) _ tCode _ $C(10) _ "```"
+            }
+            Set tResponse.type = "text"
+            
+            Do tSession.AddMessage("assistant", "Deployed Backend Class.")
             
         } ElseIf (tDecision [ "[DELEGATE: FHIR]") {
             // ---> NODE: FHIR AGENT (GENERATION)
