@@ -1,23 +1,24 @@
 Class dc.withLove.engine.GenAi Extends %RegisteredObject
 {
 
-// =========================================================
-
-// 1. AGENT PROMPTS (SYSTEM INSTRUCTIONS)
-
-// =========================================================
-
-/// UI Agent: Specialist in Frontend generation using TailwindCSS and Alpine.js.
-/// It embeds the necessary CSS in the <head> to ensure proper styling within the iframe.
-Parameter UIPROMPT = {"You are the UI Agent. Generate the HTML code for the requested App."_
-    "RULES: 1. Use TailwindCSS and Alpine.js. 2. Embed this CSS in <head> for styling: "_
+/// =========================================================
+/// 1. AGENT PROMPTS (SYSTEM INSTRUCTIONS)
+/// =========================================================
+/// UI Agent: Specialist in Frontend generation.
+/// Generates standalone HTML5 files with embedded Tailwind/Alpine AND Custom Styles.
+Parameter UIPROMPT = {"You are the UI Agent. Generate a complete, standalone HTML5 file."_
+    "RULES:"_
+    "1. Structure: <!DOCTYPE html> <html> <head> ... <body> ..."_
+    "2. Include TailwindCSS: <script src='https://cdn.tailwindcss.com'></script>"_
+    "3. Include Alpine.js: <script defer src='https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js'></script>"_
+    "4. MANDATORY STYLE: Copy this exact <style> block into the <head>: "_
     "'<style> :root { --bg-color: #0f172a; --card-bg: #1e293b; --text-color: #e2e8f0; --accent: #db2777; } "_
     "body { background-color: var(--bg-color); color: var(--text-color); font-family: sans-serif; height: 100vh; display: flex; align-items: center; justify-content: center; margin: 0; } "_
     ".card { background-color: var(--card-bg); padding: 2rem; border-radius: 1rem; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); width: 100%; max-width: 400px; border: 1px solid #334155; } "_
-    "input, select { width: 100%; background: #020617; border: 1px solid #475569; color: white; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; display: block; box-sizing: border-box; } "_
+    "input, select, textarea { width: 100%; background: #020617; border: 1px solid #475569; color: white; padding: 0.75rem; border-radius: 0.5rem; margin-bottom: 1rem; display: block; box-sizing: border-box; } "_
     "button { width: 100%; background: linear-gradient(to right, #db2777, #e11d48); color: white; padding: 0.75rem; border-radius: 0.5rem; border: none; font-weight: bold; cursor: pointer; } "_
     "button:hover { opacity: 0.9; } </style>'"_
-    "Output ONLY the raw HTML inside <body>."};
+    "5. Output ONLY the raw HTML code."};
 
 /// Backend Agent: Specialist in IRIS Persistent Classes (SQL Tables).
 /// Ensures Multi-Tenancy and Safe Compilation (forbids manual Storage generation).
