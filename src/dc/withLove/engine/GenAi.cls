@@ -84,12 +84,9 @@ Parameter SUPERVISORPROMPT = {"You are the Supervisor of a Hospital Software Tea
     "- If user wants to IMPORT/CONVERT FHIR data: '[DELEGATE: INTEGRATION] <json_content>'"_
     "- If general chat: Just answer using the Context provided."};
 
-// =========================================================
-
-// 2. ORCHESTRATOR LOGIC (LANGGRAPH-LITE)
-
-// =========================================================
-
+/// =========================================================
+/// 2. ORCHESTRATOR LOGIC (LANGGRAPH-LITE)
+/// =========================================================
 /// Main Entry Point. Manages Session, RAG Context, and Agent Routing.
 ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As %String, pApiKey As %String, pModel As %String) As %DynamicObject
 {
@@ -204,8 +201,8 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
                 Set tResponse.type = "text"
                 Set tResponse.content = "✅ **FHIR Ingested!**" _ $C(10) _ "SDA3 Generated."
             } Else {
-                 Set tResponse.type = "text"
-                 Set tResponse.content = "❌ **Integration Failed:** " _ tResult.error
+                Set tResponse.type = "text"
+                Set tResponse.content = "❌ **Integration Failed:** " _ tResult.error
             }
             Do tSession.AddMessage("assistant", tResponse.content)
             
@@ -224,12 +221,9 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
     Return tResponse
 }
 
-// =========================================================
-
-// 3. HELPER METHODS & PYTHON BRIDGES
-
-// =========================================================
-
+/// =========================================================
+/// 3. HELPER METHODS & PYTHON BRIDGES
+/// =========================================================
 /// Calls a specific Worker Agent with a defined System Prompt.
 ClassMethod CallWorker(pInstructions As %String, pApiKey As %String, pModel As %String, pSystemPrompt As %String) As %String
 {
