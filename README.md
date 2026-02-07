@@ -63,7 +63,7 @@ withLove utilizes a **multi-agent architecture** powered by cutting-edge technol
                           ▼
 ┌─────────────────────────────────────────────────────────────┐
 │              GenAi.AgentRun() (Orchestrator)                │
-│  - Intent Detection (CREATE_API, CREATE_TABLE, SCAN, etc)  │
+│  - Intent Detection (CREATE_API, CREATE_TABLE, SCAN, etc)   │
 │  - Delegates to specialized factories                       │
 └─────────────────────────┬───────────────────────────────────┘
                           │
@@ -102,7 +102,7 @@ withLove utilizes a **multi-agent architecture** powered by cutting-edge technol
 
 ### 1. **Clone the Repository**
 ```sh
-git clone https://github.com/your-org/withLove.git
+git clone https://github.com/musketeers-br/withLove
 cd withLove
 ```
 
@@ -124,20 +124,10 @@ docker-compose up -d
 docker-compose logs -f iris
 ```
 
-Wait until you see logs like:
-
-```bash
-withlove-iris-1  | [INFO] ...started InterSystems IRIS instance IRIS
-withlove-iris-1  | [INFO] Installing FHIR Server (ZPM)...
-withlove-iris-1  | [INFO] This may take several minutes...
-withlove-iris-1  | [INFO] FHIR Server installed successfully
-withlove-iris-1  | [INFO] withLove is ready!
-```
-
 > **⚠️ Important Note:**  
-> This project automatically installs the **FHIR Server** via ZPM (`zpm "install fhir-server"`), which can take **5-15 minutes** depending on your network speed and machine specs. Please be patient during the first startup.
+> This project automatically installs the **FHIR Server** via ZPM (`zpm "install fhir-server"`), which can take **15-25 minutes** depending on your network speed and machine specs. Please be patient during the first startup.
 
-You can also check the [Management Portal](http://localhost:52773/csp/sys/UtilHome.csp) (user: `_system`, password: `SYS`) to verify installation status.
+You can also check the Management Portal (user: `_system`, password: `SYS`) to verify installation status.
 
 ---
 
@@ -145,7 +135,7 @@ You can also check the [Management Portal](http://localhost:52773/csp/sys/UtilHo
 
 Once withLove is running, access the **Chat Interface**:
 
-🌐 **Frontend:** [http://localhost:8080](http://localhost:8080)
+🌐 **Frontend:** http://localhost:port/withlove/index.html
 
 ### **Example 1: Create a FHIR Patient API**
 
@@ -166,7 +156,6 @@ Once withLove is running, access the **Chat Interface**:
 
 ✅ Deploying to: /withlove/services/hospital-main/PatientAPI
 
-[✅ Approve] [✏️ Adjust] [❌ Cancel]
 ```
 
 **Click "Approve"** → API is live in seconds!
@@ -195,7 +184,6 @@ curl -X GET http://localhost:52773/withlove/services/hospital-main/PatientAPI/li
 ✅ Compiled successfully
 ✅ Table available: dc_withLove_hospital_main_data.DengueCase
 
-[✅ Approve]
 ```
 
 ---
@@ -215,7 +203,6 @@ curl -X GET http://localhost:52773/withlove/services/hospital-main/PatientAPI/li
    - PID:DOB → Patient.BirthTime
 ✅ Compiled successfully
 
-[✅ Approve]
 ```
 
 ---
@@ -238,7 +225,6 @@ curl -X GET http://localhost:52773/withlove/services/hospital-main/PatientAPI/li
 - HS.SDA3.Encounter: Missing index on PatientID (slow queries >500ms)
 - Custom.Patient.Insurance: No tenant isolation (security risk)
 
-[✨ Create All APIs] [📋 View Details]
 ```
 
 ---
@@ -272,19 +258,6 @@ According to your protocol:
 
 ---
 
-## 🎨 Advanced Features
-
-### **Dashboard Cockpit** (Coming Soon - v1.0)
-
-Access your command center at [http://localhost:8080/dashboard.html](http://localhost:8080/dashboard.html)
-
-- 📊 **KPIs**: Apps, APIs, Tables, Interop components, RAG documents
-- 📈 **Analytics**: Activity trends (last 7 days)
-- 🔗 **Quick Links**: Open apps, test APIs, view database schemas
-- ⚡ **One-Click Actions**: Deploy, delete, export configurations
-
----
-
 ## 🗂️ Project Structure
 
 ```
@@ -309,15 +282,10 @@ withLove/
 │   │           ├── Tenant.cls
 │   │           ├── LLMSession.cls
 │   │           └── KnowledgeBase.cls
-├── static/
+├── csp/
 │   ├── index.html              # Chat Interface
-│   ├── dashboard.html          # Admin Dashboard (v1.0)
-│   └── assets/
-│       ├── css/
-│       └── js/
 ├── docker-compose.yml
 ├── Dockerfile
-├── .env.example
 └── README.md
 ```
 
@@ -329,13 +297,13 @@ withLove/
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/agent/chat` | POST | Conversational agent (main interface) |
-| `/api/deploy` | POST | Deploy generated assets |
-| `/api/knowledge/add` | POST | Add document to RAG |
-| `/api/knowledge/list` | GET | List RAG documents |
-| `/api/scan/list` | GET | List brownfield assets |
-| `/api/scan/analyze` | POST | Analyze asset with AI |
-| `/api/dashboard/summary` | GET | Get dashboard metrics |
+| `/withlove/api/agent/chat` | POST | Conversational agent (main interface) |
+| `/withlove/api/deploy` | POST | Deploy generated assets |
+| `/withlove/api/knowledge/add` | POST | Add document to RAG |
+| `/withlove/api/knowledge/list` | GET | List RAG documents |
+| `/withlove/api/scan/list` | GET | List brownfield assets |
+| `/withlove/api/scan/analyze` | POST | Analyze asset with AI |
+| `/withlove/api/dashboard/summary` | GET | Get dashboard metrics |
 
 ### **Dynamic Service Endpoints**
 
@@ -354,29 +322,6 @@ PUT /withlove/services/hospital-main/PatientAPI/update/:id
 
 ---
 
-## 🧪 Testing
-
-### **Using Postman**
-
-Import the collection: [`postman/withLove.postman_collection.json`](./postman/withLove.postman_collection.json)
-
-### **Using cURL**
-
-**Chat Example:**
-```bash
-curl -X POST http://localhost:52773/api/agent/chat \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-key" \
-  -H "X-Tenant-ID: hospital-main" \
-  -d '{
-    "sessionId": "session-123",
-    "prompt": "Create an API for patients",
-    "model": "gpt-4o"
-  }'
-```
-
----
-
 ## 📊 Roadmap
 
 ### ✅ **v0.9 MVP (Done)**
@@ -389,21 +334,7 @@ curl -X POST http://localhost:52773/api/agent/chat \
 
 ### 🚧 **v1.0 Gold (Current)**
 - [ ] Complete `GenAi.cls` implementation
-- [ ] Dashboard Cockpit
 - [ ] End-to-end testing
-- [ ] Documentation
-
-### 🔮 **v1.1 (Planned)**
-- [ ] Analytics Agent (BI dashboards)
-- [ ] Approval workflow (multi-stakeholder)
-- [ ] Swagger UI auto-generation
-- [ ] Performance optimizations
-
-### 🌟 **v2.0 (Future)**
-- [ ] Visual workflow builder (Node-RED style)
-- [ ] Low-code UI builder (drag-and-drop)
-- [ ] Template marketplace
-- [ ] Multi-language support
 
 ---
 
@@ -428,20 +359,6 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 💬 Support
 
-- **Issues**: [GitHub Issues](https://github.com/musketeers-br/with-love/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/musketeers-br/with-love/discussions)
+- **Issues**: [GitHub Issues](https://github.com/musketeers-br/withLove/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/musketeers-br/withLove/discussions)
 - **Community**: [InterSystems Developer Community](https://community.intersystems.com/)
-
----
-
-## 🌟 Star History
-
-If you find withLove helpful, please consider giving it a ⭐ on GitHub!
-
----
-
-**Made with 💜 for the healthcare community**
-
-
-> **⚠️ Important Note:**  
-> This project automatically installs the **FHIR Server** via ZPM (`zpm "install fhir-server"`), which can take **5-15 minutes** depending on your network speed and machine specs. Please be patient during the first startup.
