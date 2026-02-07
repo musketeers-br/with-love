@@ -12,6 +12,9 @@ XData UrlMap [ XMLNamespace = "http://www.intersystems.com/urlmap" ]
 
     <Route Url="/knowledge/add" Method="POST" Call="AddKnowledge"/>
     <Route Url="/knowledge/list" Method="GET" Call="ListKnowledge"/>
+
+    <Route Url="/scanner/assets" Method="GET" Call="ListAssets"/>
+    <Route Url="/scanner/analyze" Method="POST" Call="AnalyzeAsset"/>
 </Routes>
 }
 
@@ -87,25 +90,20 @@ ClassMethod DeployApp() As %Status
     Return $$$OK
 }
 
-/// Rota opcional para demo de FHIR puro
+/// Endpoint: Pure FHIR Generation (Optional Demo)
 ClassMethod GenerateFHIR() As %Status
 {
     Try {
         Set tApiKey = ..GetAPIKey()
-        
-        // Segurança: Valida header também aqui
-        If tApiKey="" {
-            Write {"error":"Missing Authorization Header"}.%ToJSON()
-            Return $$$OK
-        }
+        If tApiKey="" { Write {"error":"Missing Authorization Header"}.%ToJSON() Return $$$OK }
 
         Set tPayload = {}.%FromJSON(%request.Content)
         Set tPrompt = tPayload.prompt
         Set tModel = tPayload.model
         
-        // Usa prompt de sistema customizado para FHIR
+        // Custom system prompt for FHIR expertise
         Set tSysPrompt = "You are an expert in HL7 FHIR R4. Output ONLY raw JSON Bundle."
-        Set tContent = ##class(dc.withLove.engine.GenAi).Generate(tPrompt, tApiKey, tModel, tSysPrompt)
+        Set tContent = ##class(dc.withLove.engine.GenAi).CallWorker(tPrompt, tApiKey, tModel, tSysPrompt)
         
         Write { "fhir": (tContent) }.%ToJSON()
     } Catch ex {
@@ -114,14 +112,15 @@ ClassMethod GenerateFHIR() As %Status
     Return $$$OK
 }
 
-/// API: POST /knowledge/add
-/// Body: { "title": "Protocolo Dengue", "content": "..." }
+/// Endpoint: Add Document to Knowledge Base
+/// Body: { "title": "Dengue Protocol", "content": "..." }
 ClassMethod AddKnowledge() As %Status
 {
     Try {
         Set tTenant = ..GetTenant()
         Set tPayload = {}.%FromJSON(%request.Content)
         
+        // Delegates to KnowledgeService (which handles embedding generation)
         Set tSC = ##class(dc.withLove.service.KnowledgeService).AddDocument(tTenant, tPayload.title, tPayload.content)
         
         If $$$ISERR(tSC) {
@@ -142,6 +141,42 @@ ClassMethod ListKnowledge() As %Status
         Set tTenant = ..GetTenant()
         Set tList = ##class(dc.withLove.service.KnowledgeService).ListDocuments(tTenant)
         Write tList.%ToJSON()
+    } Catch ex {
+        Write {"error": (ex.DisplayString())}.%ToJSON()
+    }
+    Return $$$OK
+}
+
+/// Endpoint: Scanner - List User Assets (Tables/Classes)
+ClassMethod ListAssets() As %Status
+{
+    Try {
+        Set tTenant = ..GetTenant()
+        Set tList = ##class(dc.withLove.service.ScannerService).ListUserAssets(tTenant)
+        Write tList.%ToJSON()
+    } Catch ex {
+        Write {"error": (ex.DisplayString())}.%ToJSON()
+    }
+    Return $$$OK
+}
+
+/// Endpoint: Scanner - Analyze Asset with AI
+/// Body: { "assetName": "dc.withLove.data.Patient" }
+ClassMethod AnalyzeAsset() As %Status
+{
+    Try {
+        Set tApiKey = ..GetAPIKey()
+        Set tPayload = {}.%FromJSON(%request.Content)
+        Set tName = tPayload.assetName
+        
+        // 1. Retrieve Source Code
+        Set tCode = ##class(dc.withLove.service.ScannerService).GetAssetContent(tName)
+        
+        // 2. Analyze using GenAI
+        Set tSuggestions = ##class(dc.withLove.engine.GenAi).AnalyzeLegacy(tCode, tApiKey, "gpt-4o")
+        
+        Write tSuggestions.%ToJSON()
+        
     } Catch ex {
         Write {"error": (ex.DisplayString())}.%ToJSON()
     }

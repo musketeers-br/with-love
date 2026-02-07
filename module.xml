@@ -23,6 +23,16 @@
       />
 
       <WebApplication 
+        Name="/withlove/services" 
+        NameSpace="{$namespace}"
+        DispatchClass="dc.withLove.service.RestRouter"
+        MatchRoles=":%All"
+        AutheEnabled="#{$$$AutheCache + $$$AutheUnauthenticated}"
+        ServeFiles="1"
+        CookiePath="/csp/withlove/services"
+      />
+
+      <WebApplication 
         Name="/withlove"
         Url="/withlove"
         NameSpace="${namespace}"

@@ -32,9 +32,9 @@ ClassMethod DeployBackend(pSourceCode As %String, pTenantId As %String) As %Stri
         Set tMatcher.Text = pSourceCode
         
         If 'tMatcher.Locate() {
-             Set tMatcher = ##class(%Regex.Matcher).%New("Class\s+([\w\.]+)")
-             Set tMatcher.Text = pSourceCode
-             If 'tMatcher.Locate() Throw ##class(%Exception.General).%New("Parser", 500, , "Could not identify Class Name.")
+            Set tMatcher = ##class(%Regex.Matcher).%New("Class\s+([\w\.]+)")
+            Set tMatcher.Text = pSourceCode
+            If 'tMatcher.Locate() Throw ##class(%Exception.General).%New("Parser", 500, , "Could not identify Class Name.")
         }
         Set tOldClassName = tMatcher.Group(1)
         
