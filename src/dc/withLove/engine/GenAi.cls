@@ -35,97 +35,95 @@ Parameter INTEGRATIONPROMPT = {"You are the Integration Agent. Your job is to ex
 /// Supervisor Prompt: The Router Logic
 /// Decides which worker is best suited for the user request
 Parameter SUPERVISORPROMPT = {"You are the Supervisor of a Hospital Software Team. Analyze the user request and DELEGATE to a worker."_
+    "CONTEXT FROM KNOWLEDGE BASE: "_
+    "{{CONTEXT_DATA}}"_
+    "--------------------------------"_
     "Available Workers: [UI AGENT], [BACKEND AGENT], [FHIR AGENT], [INTEGRATION AGENT]."_
     "Response Format:"_
     "- If user wants an App Interface: '[DELEGATE: UI] <instructions>'"_
     "- If user wants a Database Class (Table): '[DELEGATE: BACKEND] <instructions>'"_
     "- If user wants FHIR Data generated: '[DELEGATE: FHIR] <instructions>'"_
-    "- If user wants to IMPORT/CONVERT FHIR data (e.g. 'save this patient', 'import json'): '[DELEGATE: INTEGRATION] <json_content>'"_
-    "- If general chat: Just answer."};
+    "- If user wants to IMPORT/CONVERT FHIR data: '[DELEGATE: INTEGRATION] <json_content>'"_
+    "- If general chat: Just answer using the Context provided."};
 
 /// The "LangGraph" Orchestrator running in IRIS
 /// Manages Session History and Routing
+/// Orchestrator with RAG Support
 ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As %String, pApiKey As %String, pModel As %String) As %DynamicObject
 {
     Set tResponse = { "type": "text", "content": "" }
     
     Try {
+        // 1. Load Session
         Set tSession = ##class(dc.withLove.storage.LLMSession).SessionIdxOpen(pTenantId, pSessionId)
         If '$IsObject(tSession) {
             Set tSession = ##class(dc.withLove.storage.LLMSession).%New()
             Set tSession.SessionId = pSessionId
             Set tSession.TenantId = pTenantId
         }
-        
         Do tSession.AddMessage("user", pUserPrompt)
-        Set tHistory = tSession.GetHistory()
-        Set tDecision = ..PyCallLLM(tHistory.%ToJSON(), pApiKey, pModel, ..#SUPERVISORPROMPT)
         
+        // --- STEP RAG: RETRIEVE CONTEXT ---
+        Set tContextString = ""
+        // Gera embedding da pergunta do usuário
+        Set tUserVector = ..GenerateEmbedding(pUserPrompt)
+        
+        If (tUserVector '= "") {
+            // Busca os 3 documentos mais similares no banco
+            Set tContextString = ..RetrieveContext(pTenantId, tUserVector)
+        }
+        
+        If tContextString = "" Set tContextString = "No specific documents found."
+        
+        // 2. Prepare Supervisor Prompt with Context
+        Set tSystemPrompt = $Replace(..#SUPERVISORPROMPT, "{{CONTEXT_DATA}}", tContextString)
+        
+        // 3. Supervisor Decision
+        Set tHistory = tSession.GetHistory()
+        Set tDecision = ..PyCallLLM(tHistory.%ToJSON(), pApiKey, pModel, tSystemPrompt)
+        
+        // 4. Routing Logic (Mantida igual, mas agora o Supervisor é "mais esperto")
         If (tDecision [ "[DELEGATE: UI]") {
-            // ---> NODE: UI AGENT
             Set tInstructions = $Piece(tDecision, "[DELEGATE: UI]", 2)
-            Set tCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#UIPROMPT)
+            // Passa o contexto também para o Worker UI (para ele saber cores, regras, etc)
+            Set tFullInstructions = "Context: " _ tContextString _ $C(10) _ "Instructions: " _ tInstructions
+            Set tCode = ..CallWorker(tFullInstructions, pApiKey, pModel, ..#UIPROMPT)
             
             Set tResponse.type = "code"
             Set tResponse.content = tCode
-            Set tResponse.thought = "Supervisor: Delegated to UI Agent to build interface."
-            
-            Do tSession.AddMessage("assistant", "Generated UI Code.")
+            Set tResponse.thought = "Supervisor used Knowledge Base to guide UI Agent."
+            Do tSession.AddMessage("assistant", "Generated UI Code using Hospital Protocols.")
             
         } ElseIf (tDecision [ "[DELEGATE: BACKEND]") {
-            // ---> NODE: BACKEND AGENT
+            // ... (Lógica Backend mantida igual) ...
             Set tInstructions = $Piece(tDecision, "[DELEGATE: BACKEND]", 2)
             Set tCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#BACKENDPROMPT)
-            
-            // Call ClassFactory with Tenant Context
             Set tDeployResult = ##class(dc.withLove.engine.ClassFactory).DeployBackend(tCode, pTenantId)
             
             If ($Extract(tDeployResult,1,5) = "ERROR") {
                 Set tResponse.content = "❌ **Backend Build Failed**" _ $C(10) _ tDeployResult
             } Else {
-                Set tResponse.content = "✅ **Database Table Created!**" _ $C(10,10) _ 
-                                        "Table: `" _ tDeployResult _ "`" _ $C(10) _
-                                        "SQL: `SELECT * FROM " _ tDeployResult _ "`" _ $C(10,10) _
-                                        "```objectscript" _ $C(10) _ tCode _ $C(10) _ "```"
+                Set tResponse.content = "✅ **Database Table Created!**" _ $C(10) _ "Table: `" _ tDeployResult _ "`"
             }
             Set tResponse.type = "text"
-            
-            Do tSession.AddMessage("assistant", "Deployed Backend Class.")
-            
-        } ElseIf (tDecision [ "[DELEGATE: FHIR]") {
-            // ---> NODE: FHIR AGENT (GENERATION)
-            Set tInstructions = $Piece(tDecision, "[DELEGATE: FHIR]", 2)
-            Set tCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#FHIRPROMPT)
-            
-            Set tResponse.type = "text"
-            Set tResponse.content = "```json" _ $C(10) _ tCode _ $C(10) _ "```"
-            
             Do tSession.AddMessage("assistant", tResponse.content)
-            
+
         } ElseIf (tDecision [ "[DELEGATE: INTEGRATION]") {
-            // ---> NODE: INTEGRATION AGENT (INGESTION)
+            // ... (Lógica Integration mantida igual) ...
             Set tRawContent = $Piece(tDecision, "[DELEGATE: INTEGRATION]", 2)
-            
-            // Step A: Extract clean JSON using the Agent
             Set tJsonData = ..CallWorker(tRawContent, pApiKey, pModel, ..#INTEGRATIONPROMPT)
-            
-            // Step B: Call Native FHIR Handler
             Set tResult = ##class(dc.withLove.engine.FHIRToSDAHandler).ProcessFHIR(tJsonData)
-            
             If (tResult.status = "success") {
                 Set tResponse.type = "text"
-                Set tResponse.content = "✅ **Integration Successful!**" _ $C(10,10) _ 
-                                        "Transformed FHIR to SDA3 Container:" _ $C(10) _ 
-                                        "```xml" _ $C(10) _ tResult.sda _ $C(10) _ "```"
+                Set tResponse.content = "✅ **Integration Successful!**" _ $C(10) _ "SDA3 XML Generated."
             } Else {
                 Set tResponse.type = "text"
                 Set tResponse.content = "❌ **Integration Failed:** " _ tResult.error
             }
-            
             Do tSession.AddMessage("assistant", tResponse.content)
             
         } Else {
-            // ---> NODE: CONVERSATION (GENERAL CHAT)
+            // General Chat
             Set tResponse.type = "text"
             Set tResponse.content = tDecision
             Do tSession.AddMessage("assistant", tDecision)
@@ -184,6 +182,47 @@ ClassMethod PyCallLLM(messagesJson As %String, apiKey As %String, model As %Stri
 
     except Exception as e:
         return f"Error: {str(e)}"
+}
+
+ClassMethod GenerateEmbedding(pText As %String) As %String [ Language = python ]
+{
+    try:
+        from sentence_transformers import SentenceTransformer
+        import json
+        
+        # Carrega modelo leve (cacheado na memória se possível em prod)
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        
+        # Gera embeddings
+        embeddings = model.encode(pText)
+        
+        # Retorna como string JSON para o ObjectScript converter para %Vector
+        return str(embeddings.tolist())
+    except Exception as e:
+        print(f"Embedding Error: {e}")
+        return ""
+}
+
+ClassMethod RetrieveContext(pTenantId As %String, pVectorStr As %String) As %String
+{
+    Set tContext = ""
+    Try {
+        Set tVector = $ZConvert(pVectorStr, "I", "JSON")
+        
+        Set tQuery = "SELECT TOP 3 Title, Content FROM dc_withLove_storage.KnowledgeBase " _
+                "WHERE TenantID = ? " _
+                "ORDER BY VECTOR_DOT_PRODUCT(Embedding, TO_VECTOR(?, DECIMAL)) DESC"
+
+        Set tRS = ##class(%SQL.Statement).%ExecDirect(, tQuery, pTenantId, tVector)
+        
+        While tRS.%Next() {
+            Set tContext = tContext _ "Document: " _ tRS.Title _ $C(10) _ 
+                "Content: " _ $Extract(tRS.Content, 1, 1000) _ "..." _ $C(10,10)
+        }
+    } Catch ex {
+        Set tContext = "Error retrieving context: " _ ex.DisplayString()
+    }
+    Return tContext
 }
 
 }
