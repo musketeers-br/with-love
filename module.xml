@@ -37,7 +37,7 @@
         Url="/withlove"
         NameSpace="${namespace}"
         Description="Frontend With Love"
-        Path="${cspdir}/csp/${namespace}"
+        Path="{$cspdir}withloveapi" 
         
         ServeFiles="2"
         Recurse="1"
