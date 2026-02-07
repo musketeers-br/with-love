@@ -20,7 +20,9 @@ ClassMethod CreateApp(pTenantId As %String, pAppName As %String, pHtmlContent As
         // --- 2. VERSIONING (Database Storage) ---
         // We still keep the metadata in SQL for the Dashboard/History
         Set statement = ##class(%SQL.Statement).%New()
-        $$$ThrowOnError(statement.%PrepareClassQuery("dc.withLove.storage.Project", "GetProjectId"))
+        Set tSC = statement.%PrepareClassQuery("dc.withLove.storage.Project", "GetProjectId")
+        If $$$ISERR(tSC) Throw ##class(%Exception.StatusException).CreateFromStatus(tSC)
+        
         Set tRS = statement.%Execute(pTenantId, tCleanName)
         Do tRS.%Next()
         Set tProjId = tRS.%Get("ProjId")
@@ -47,13 +49,19 @@ ClassMethod CreateApp(pTenantId As %String, pAppName As %String, pHtmlContent As
 
         // --- 3. PHYSICAL FILE GENERATION ---
         
+        // FIX: Determine Directory Separator safely
+        Set tSep = $Select($ZVersion["Windows":"\", 1:"/")
+        
         // Construct Filename: dc.withLove.<tenant>.apps.<AppName>.html
         Set tFilename = "dc.withLove." _ tCleanTenant _ ".apps." _ tCleanName _ ".html"
         
         // Determine Physical Path
         // Logic: Get IRIS Install Dir + "csp" + Namespace (standard convention)
-        // Note: Ideally, check Security.Applications, but this covers 99% of default setups.
-        Set tCSPDir = $System.Util.InstallDirectory() _ "csp" _ $System.FilePath.GetDirectorySeparator() _ $ZConvert($Namespace, "L") _ $System.FilePath.GetDirectorySeparator()
+        Set tInstallDir = $System.Util.InstallDirectory()
+        // Ensure install dir ends with separator
+        If $Extract(tInstallDir, *) '= tSep Set tInstallDir = tInstallDir _ tSep
+        
+        Set tCSPDir = tInstallDir _ "csp" _ tSep _ $ZConvert($Namespace, "L") _ tSep
         
         // Ensure directory exists (create if not)
         If '##class(%File).DirectoryExists(tCSPDir) {

@@ -11,6 +11,10 @@ ClassMethod DeployApi(pSourceCode As %String, pTenantId As %String) As %String
         Set pSourceCode = $Replace(pSourceCode, "```objectscript", "")
         Set pSourceCode = $Replace(pSourceCode, "```", "")
         
+        If (pSourceCode [ "$$$GETERRORTEXT") {
+            Set pSourceCode = $Replace(pSourceCode, "$$$GETERRORTEXT", "$System.Status.GetErrorText")
+        }
+        
         // 2. Extract Original Class Name
         Set tMatcher = ##class(%Regex.Matcher).%New("Class\s+([\w\.]+)\s+Extends")
         Set tMatcher.Text = pSourceCode
@@ -18,7 +22,6 @@ ClassMethod DeployApi(pSourceCode As %String, pTenantId As %String) As %String
         Set tOriginalName = tMatcher.Group(1)
         
         // 3. Package Enforcement (Multi-Tenancy)
-        // Target: dc.withLove.<Tenant>.api.<ServiceName>
         Set tCleanTenant = $ZStrip(pTenantId, "*E", "", "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
         If tCleanTenant="" Set tCleanTenant = "default"
         
@@ -39,7 +42,6 @@ ClassMethod DeployApi(pSourceCode As %String, pTenantId As %String) As %String
         Do tStream.Write(pSourceCode)
         Do tStream.Rewind()
         
-        // Compile silently (-d) to avoid breaking JSON response
         Set tSC = $System.OBJ.LoadStream(tStream, "ck-d", .tErr)
         If $$$ISERR(tSC) Throw ##class(%Exception.StatusException).CreateFromStatus(tSC)
         
