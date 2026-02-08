@@ -3,7 +3,7 @@
   <Document name="dc-withlove.ZPM">
     <Module>
       <Name>dc-withlove</Name>
-      <Version>0.0.11</Version>
+      <Version>0.0.12</Version>
       <Description></Description>
       <Packaging>module</Packaging>
       <SourcesRoot>src</SourcesRoot>
