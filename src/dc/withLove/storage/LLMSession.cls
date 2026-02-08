@@ -8,8 +8,14 @@ Property TenantId As %String(MAXLEN = 128);
 /// JSON Array of messages: [{"role":"user", "content":"..."}, {"role":"assistant", "content":"..."}]
 Property History As %Stream.GlobalCharacter;
 
-/// Current State of the Agent (e.g., "GATHERING_REQS", "CODING", "REVIEW")
-Property CurrentState As %String [ InitialExpression = "GATHERING_REQS" ];
+/// State machine: "IDLE" (Ready for prompt), "AWAITING_APPROVAL" (Code generated, waiting user)
+Property CurrentState As %String [ InitialExpression = "IDLE" ];
+
+/// Stores the AI generated code pending approval
+Property DraftCode As %Stream.GlobalCharacter;
+
+/// Stores the type of the draft: "UI", "BACKEND", "API", "INTEROP"
+Property DraftType As %String;
 
 Property CreatedAt As %DateTime [ InitialExpression = {$ZDateTime($Horolog, 3)} ];
 
@@ -39,6 +45,15 @@ Method AddMessage(pRole As %String, pContent As %String) As %Status
     Return tSC
 }
 
+/// Helper to Clear Draft
+Method ClearDraft() As %Status
+{
+    Set ..CurrentState = "IDLE"
+    Set ..DraftType = ""
+    Do ..DraftCode.Clear()
+    Quit ..%Save()
+}
+
 /// Helper to get history as dynamic object
 Method GetHistory() As %DynamicArray
 {
@@ -66,6 +81,12 @@ Storage Default
 </Value>
 <Value name="6">
 <Value>CreatedAt</Value>
+</Value>
+<Value name="7">
+<Value>DraftCode</Value>
+</Value>
+<Value name="8">
+<Value>DraftType</Value>
 </Value>
 </Data>
 <DataLocation>^dc.withLove.stoA0CD.LLMSessionD</DataLocation>

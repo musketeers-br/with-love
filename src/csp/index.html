@@ -1,294 +1,364 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>withLove Studio</title>
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    
     <style>
-        [x-cloak] {
-            display: none !important;
-        }
-
-        body {
-            font-family: 'Inter', sans-serif;
-        }
-
-        ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
-        }
-
-        ::-webkit-scrollbar-track {
-            background: #0f172a;
-        }
-
-        ::-webkit-scrollbar-thumb {
-            background: #334155;
-            border-radius: 4px;
-        }
-
-        ::-webkit-scrollbar-thumb:hover {
-            background: #475569;
-        }
-
-        .glass-panel {
-            background: rgba(30, 41, 59, 0.7);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(51, 65, 85, 0.5);
+        [x-cloak] { display: none !important; }
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* Custom Scrollbar for dark theme */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+        
+        /* Code block styling for Chat Bubble */
+        pre { 
+            font-family: 'Menlo', 'Monaco', 'Courier New', monospace; 
+            font-size: 0.85em; 
+            white-space: pre-wrap;       /* Wrap long lines */
+            word-break: break-all;       /* Prevent overflow */
         }
     </style>
+
+    <script>
+        document.addEventListener('alpine:init', () => {
+            Alpine.data('studio', () => ({
+                // --- UI State ---
+                chatOpen: true, 
+                input: '', 
+                messages: [], 
+                loading: false, 
+                
+                // --- Canvas State ---
+                canvasMode: 'ui',     // Options: 'ui', 'api', 'data'
+                viewMode: 'mobile',   // Options: 'mobile', 'desktop'
+                
+                // --- Artifacts State ---
+                // 'currentAppUrl' is for deployed apps (server URL).
+                // 'currentDraftHtml' is for raw HTML preview (local string).
+                // We initialize with null to avoid empty iframe issues.
+                currentAppUrl: null,      
+                currentDraftHtml: null,   
+                currentApiUrl: null,
+                currentTableName: null,
+                
+                // --- Authentication & Configuration ---
+                tenantId: 'hospital-main',
+                apiKey: '',
+                model: 'gpt-4o',
+                
+                /**
+                 * Main function to send user prompt to the Backend Agent.
+                 */
+                async sendMessage(manualPrompt = null) {
+                    const prompt = manualPrompt || this.input;
+                    if (!prompt.trim()) return;
+                    
+                    // Add user message to history (unless it's a hidden system command)
+                    if (prompt !== 'CONFIRM_APPROVE' && prompt !== 'CANCEL_DRAFT') {
+                        this.messages.push({ role: 'user', content: prompt });
+                    }
+                    
+                    this.input = '';
+                    this.loading = true;
+
+                    try {
+                        const res = await fetch('/withlove/api/agent/chat', {
+                            method: 'POST',
+                            headers: { 
+                                'Content-Type': 'application/json',
+                                'Authorization': 'Bearer ' + this.apiKey,
+                                'X-Tenant-ID': this.tenantId
+                            },
+                            body: JSON.stringify({ 
+                                prompt: prompt, 
+                                sessionId: 'session-1',
+                                model: this.model
+                            })
+                        });
+                        const data = await res.json();
+                        
+                        // --- DEBUG: Log the exact response from the backend ---
+                        console.log('🔹 Server Response Payload:', data); 
+
+                        // --- RESPONSE HANDLING ---
+
+                        // CASE 1: Code Generation (UI Draft)
+                        // Backend explicitly flagged content as HTML/UI code
+                        if (data.type === 'code') {
+                            console.log('🔸 Action: Handling as CODE (UI Preview Trigger)');
+                            
+                            this.messages.push({ 
+                                role: 'assistant', 
+                                content: data.content, 
+                                isReview: true, 
+                                thought: data.thought || 'Please review the generated code.'
+                            });
+                            
+                            const rawCode = this.extractRawCode(data.content);
+                            console.log('🔸 Extracted Raw HTML:', rawCode ? 'Success (Length: ' + rawCode.length + ')' : 'Failed / Null');
+
+                            if (rawCode) {
+                                this.currentDraftHtml = rawCode;
+                                this.currentAppUrl = null; // Clear URL to force srcdoc usage
+                                this.canvasMode = 'ui';    // Switch to UI tab
+                                
+                                // Auto-close chat sidebar on mobile for better view
+                                if (window.innerWidth < 1000) this.chatOpen = false;
+                            }
+                        }
+                        // CASE 2: Generic Review (SQL/API)
+                        else if (data.type === 'review') {
+                            console.log('🔸 Action: Handling as REVIEW (Standard Code Review)');
+                            this.messages.push({ 
+                                role: 'assistant', 
+                                content: data.content, 
+                                isReview: true, 
+                                thought: data.thought || 'Please review the generated code.'
+                            });
+                        }
+                        // CASE 3: Deployment Success (After Approval)
+                        else if (data.content && data.content.includes('✅ **Deployed!**')) {
+                            console.log('🔸 Action: Handling as DEPLOYED (Artifact Created)');
+                            this.messages.push({ role: 'assistant', content: data.content });
+                            this.parseArtifacts(data.content); // Extract URL/Table name
+                            this.currentDraftHtml = null;      // Clear draft, now we have a real app
+                        }
+                        // CASE 4: Standard Chat Message
+                        else {
+                            console.log('🔸 Action: Handling as STANDARD TEXT');
+                            this.messages.push({ role: 'assistant', content: data.content });
+                        }
+                        
+                    } catch (e) {
+                        console.error('❌ Error in sendMessage:', e);
+                        this.messages.push({ role: 'assistant', content: 'Error: ' + e.message });
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                /**
+                 * Helper: Escape HTML characters to display code safely in chat bubbles.
+                 */
+                escapeHtml(unsafe) {
+                    return unsafe
+                        .replace(/&/g, "&amp;")
+                        .replace(/</g, "&lt;")
+                        .replace(/>/g, "&gt;")
+                        .replace(/"/g, "&quot;")
+                        .replace(/'/g, "&#039;");
+                },
+
+                /**
+                 * Helper: Extract raw code from the CDATA block sent by Backend.
+                 */
+                extractRawCode(content) {
+                    if (!content || !content.includes('<![CDATA[')) return null;
+                    // Robust regex to capture everything between CDATA tags
+                    const match = content.match(/<!\[CDATA\[([\s\S]*?)\]\]>/);
+                    return match ? match[1].trim() : null;
+                },
+
+                /**
+                 * Formatter: Renders the chat message.
+                 * If CDATA is found, it renders a styled Code Block.
+                 * If plain text, it renders text with line breaks.
+                 */
+                formatMessage(content) {
+                    if (!content) return '';
+                    
+                    if (content.includes('<![CDATA[')) {
+                        return content.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (match, code) => {
+                            const safeCode = this.escapeHtml(code);
+                            // Returns a UI card representing the code block
+                            return `<div class="mt-2 mb-2 bg-slate-950 rounded-lg border border-slate-700 overflow-hidden">
+                                      <div class="bg-slate-900 px-3 py-1 text-xs text-slate-500 border-b border-slate-800 font-mono flex justify-between">
+                                        <span>Generated Code</span>
+                                        <span class="text-[10px] uppercase text-emerald-500">Preview Ready</span>
+                                      </div>
+                                      <pre class="p-3 text-xs text-green-400 overflow-x-auto">${safeCode}</pre>
+                                    </div>`;
+                        });
+                    }
+                    // Default text handling
+                    return this.escapeHtml(content).replace(/\n/g, '<br>');
+                },
+
+                /**
+                 * Parser: Detects Deployed Artifacts (URLs, Table names) from Agent text.
+                 */
+                parseArtifacts(text) {
+                    // Detect UI URL
+                    if (text.includes('App URL:')) {
+                        const match = text.match(/App URL:\s*[`*]*([^`*\s]+)[`*]*/);
+                        if (match) { this.currentAppUrl = match[1]; this.canvasMode = 'ui'; }
+                    }
+                    // Detect API Endpoint
+                    if (text.includes('API available at:')) {
+                        const match = text.match(/API available at:\s*[`*]*([^`*\s]+)[`*]*/);
+                        if (match) { this.currentApiUrl = match[1]; this.canvasMode = 'api'; }
+                    }
+                    // Detect SQL Table
+                    if (text.includes('Table:')) {
+                        const match = text.match(/Table:\s*[`*]*([a-zA-Z0-9_.]+)[`*]*/);
+                        if (match) { this.currentTableName = match[1]; this.canvasMode = 'data'; }
+                    }
+                },
+
+                // --- HITL Actions (Human-in-the-Loop) ---
+
+                async approveDraft(msgIndex) {
+                    this.messages[msgIndex].isReview = false; // Hide buttons
+                    this.messages[msgIndex].content += '\n\n✅ [APPROVED by User]';
+                    await this.sendMessage('CONFIRM_APPROVE');
+                },
+
+                rejectDraft(msgIndex) {
+                    this.messages[msgIndex].isReview = false;
+                    this.messages[msgIndex].content += '\n\n❌ [REJECTED by User]';
+                    this.sendMessage('CANCEL_DRAFT');
+                },
+
+                adjustDraft(msgIndex) {
+                    // Focus input for user feedback
+                    this.input = 'Change the following: ';
+                    this.$refs.chatInput.focus();
+                }
+            }))
+        })
+    </script>
 </head>
 
-<body class="bg-[#0f172a] text-slate-300 h-screen flex flex-col overflow-hidden" x-data="{ 
-          chatOpen: true, 
-          input: '', 
-          messages: [], 
-          loading: false, 
-          
-          // CANVAS STATE
-          canvasMode: 'ui', // 'ui', 'api', 'data'
-          viewMode: 'mobile', // 'mobile', 'desktop'
-          
-          // ARTIFACTS STATE
-          currentAppUrl: '',
-          currentApiUrl: '',
-          currentTableName: '',
-          
-          tenantId: 'hospital-main',
-          apiKey: '',
-          model: 'gpt-4o',
-          
-          async sendMessage() {
-              if (!this.input.trim()) return;
-              this.messages.push({ role: 'user', content: this.input });
-              let prompt = this.input;
-              this.input = '';
-              this.loading = true;
-
-              try {
-                  const res = await fetch('/withlove/api/agent/chat', {
-                      method: 'POST',
-                      headers: { 
-                          'Content-Type': 'application/json',
-                          'Authorization': 'Bearer ' + this.apiKey,
-                          'X-Tenant-ID': this.tenantId
-                      },
-                      body: JSON.stringify({ 
-                          prompt: prompt, 
-                          sessionId: 'session-1',
-                          model: this.model
-                      })
-                  });
-                  const data = await res.json();
-                  
-                  // LOGIC TO SWITCH CANVAS TABS AUTOMATICALLY
-                  if (data.type === 'code') {
-                      this.messages.push({ role: 'assistant', content: '🎨 UI Agent is building your interface...' });
-                      await this.deployApp(data.content);
-                      this.canvasMode = 'ui'; // Auto-switch to UI
-                  } else {
-                      this.messages.push({ role: 'assistant', content: data.content });
-                      
-                      // Auto-detect API Generation
-                      if (data.content.includes('Endpoint:')) {
-                          const match = data.content.match(/Endpoint: `(.*)`/);
-                          if (match) {
-                              this.currentApiUrl = match[1];
-                              this.canvasMode = 'api'; // Auto-switch to API
-                          }
-                      }
-                      
-                      // Auto-detect Database Table Generation
-                      if (data.content.includes('Table:')) {
-                          const match = data.content.match(/Table: `(.*)`/);
-                          if (match) {
-                              this.currentTableName = match[1];
-                              this.canvasMode = 'data'; // Auto-switch to Data
-                          }
-                      }
-                  }
-              } catch (e) {
-                  this.messages.push({ role: 'assistant', content: 'Error: ' + e.message });
-              } finally {
-                  this.loading = false;
-              }
-          },
-
-          async deployApp(htmlContent) {
-              try {
-                  const res = await fetch('/withlove/api/deploy-app', {
-                      method: 'POST',
-                      headers: { 
-                          'Content-Type': 'application/json',
-                          'Authorization': 'Bearer ' + this.apiKey,
-                          'X-Tenant-ID': this.tenantId 
-                      },
-                      body: JSON.stringify({ appName: 'PreviewApp', html: htmlContent })
-                  });
-                  const data = await res.json();
-                  if (data.url) {
-                      this.currentAppUrl = data.url;
-                      this.messages.push({ role: 'assistant', content: '🚀 App Deployed! Loading preview...' });
-                  } else {
-                       this.messages.push({ role: 'assistant', content: 'Deploy Error: ' + data.error });
-                  }
-              } catch (e) {
-                  console.error(e);
-              }
-          }
-      }">
+<body class="bg-[#0f172a] text-slate-300 h-screen flex flex-col overflow-hidden" x-data="studio()">
 
     <header class="h-14 border-b border-slate-800 bg-[#0f172a] flex items-center justify-between px-6 z-20">
         <div class="flex items-center gap-3">
-            <div
-                class="w-8 h-8 bg-pink-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-pink-900/20">
-                W</div>
-            <span class="font-semibold text-white tracking-tight">withLove <span
-                    class="text-xs font-normal text-slate-500 ml-1">IRIS HEALTH NATIVE</span></span>
+            <div class="w-8 h-8 bg-pink-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-pink-900/20">W</div>
+            <span class="font-semibold text-white tracking-tight">withLove <span class="text-xs font-normal text-slate-500 ml-1">IRIS HEALTH NATIVE</span></span>
         </div>
-
+        
         <div class="flex items-center gap-3">
-            <div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-md px-2 py-1">
-                <span class="text-[10px] text-slate-500 uppercase font-bold">Tenant:</span>
-                <input type="text" x-model="tenantId"
-                    class="bg-transparent border-none text-xs text-slate-300 w-24 focus:ring-0 p-0">
-            </div>
-            <div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-md px-2 py-1">
-                <span class="text-[10px] text-slate-500 uppercase font-bold">Key:</span>
-                <input type="password" x-model="apiKey"
-                    class="bg-transparent border-none text-xs text-slate-300 w-24 focus:ring-0 p-0"
-                    placeholder="sk-...">
-            </div>
-            <select x-model="model"
-                class="bg-slate-900 border border-slate-700 text-xs rounded-md px-2 py-1 text-slate-300">
-                <option value="gpt-4o">gpt-4o</option>
-                <option value="claude-3-5-sonnet">claude-3.5</option>
-            </select>
+            <input type="text" x-model="tenantId" class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 w-24 placeholder-slate-600" title="Tenant ID">
+            <input type="password" x-model="apiKey" class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 w-24" placeholder="API Key...">
+            
+            <input type="text" list="model-options" x-model="model" class="bg-slate-900 border border-slate-700 text-xs rounded px-2 py-1 text-slate-300 w-24" placeholder="Model...">
+            <datalist id="model-options">
+                <option value="gpt-4o"></option>
+                <option value="claude-3-5-sonnet"></option>
+                <option value="gemini-1.5-pro"></option>
+            </datalist>
         </div>
     </header>
 
     <main class="flex-1 flex overflow-hidden relative">
-
-        <aside class="w-[400px] bg-[#0f172a] flex flex-col border-r border-slate-800 z-10 transition-all duration-300"
-            :class="chatOpen ? 'translate-x-0' : '-translate-x-full absolute h-full'">
-
+        
+        <aside class="w-[450px] bg-[#0f172a] flex flex-col border-r border-slate-800 z-10 transition-all duration-300"
+               :class="chatOpen ? 'translate-x-0' : '-translate-x-full absolute h-full'">
+            
             <div class="flex-1 overflow-y-auto p-4 space-y-4">
+                
                 <div class="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
                     <div class="flex gap-3 mb-2">
                         <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">🤖</div>
                         <div>
                             <p class="text-sm text-white font-medium">Full Stack Architect</p>
-                            <p class="text-xs text-slate-400 mt-1">Building UI, APIs, and Schemas.</p>
+                            <p class="text-xs text-slate-400 mt-1">Ready to build secure Health Apps.</p>
                         </div>
                     </div>
                     <div class="flex flex-wrap gap-2 mt-3">
-                        <button @click="input='Create a Patient Check-in UI'; sendMessage()"
-                            class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">🖥️
-                            UI</button>
-                        <button @click="input='Create a REST API for Patients'; sendMessage()"
-                            class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">🔌
-                            API</button>
-                        <button @click="input='Create a Table for Exams'; sendMessage()"
-                            class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">💾
-                            DB</button>
+                        <button @click="input='Create a Patient Check-in UI'; sendMessage()" class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">🖥️ UI</button>
+                        <button @click="input='Create a REST API for Patients'; sendMessage()" class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">🔌 API</button>
                     </div>
                 </div>
 
-                <template x-for="msg in messages">
+                <template x-for="(msg, index) in messages">
                     <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
                         <div :class="msg.role === 'user' ? 'bg-pink-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'"
-                            class="max-w-[85%] rounded-2xl px-4 py-2 text-sm shadow-sm whitespace-pre-wrap">
-                            <p
-                                x-html="msg.content.replace(/\n/g, '<br>').replace(/`([^`]+)`/g, '<code class=\'bg-black/20 px-1 rounded text-pink-300\'>$1</code>')">
-                            </p>
+                             class="max-w-[95%] rounded-2xl px-4 py-3 text-sm shadow-sm">
+                            
+                            <div class="overflow-x-auto" x-html="formatMessage(msg.content)"></div>
+
+                            <div x-show="msg.isReview" class="mt-4 pt-4 border-t border-slate-700">
+                                <p class="text-xs text-slate-400 mb-2 font-bold" x-text="msg.thought"></p>
+                                <div class="flex gap-2">
+                                    <button @click="approveDraft(index)" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 
+                                        Approve
+                                    </button>
+                                    <button @click="adjustDraft(index)" class="flex-1 bg-amber-600 hover:bg-amber-500 text-white py-2 rounded-lg text-xs font-bold transition-colors">Adjust</button>
+                                    <button @click="rejectDraft(index)" class="flex-1 bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white py-2 rounded-lg text-xs font-bold transition-colors">Reject</button>
+                                </div>
+                            </div>
+
                         </div>
                     </div>
                 </template>
-
+                
                 <div x-show="loading" class="flex justify-start">
-                    <div
-                        class="bg-slate-800 text-slate-400 border border-slate-700 rounded-2xl px-4 py-2 text-xs flex items-center gap-2">
-                        <span class="animate-spin">⚙️</span> Building...
+                    <div class="bg-slate-800 text-slate-400 border border-slate-700 rounded-2xl px-4 py-2 text-xs flex items-center gap-2">
+                        <span class="animate-spin">⚙️</span> Thinking...
                     </div>
                 </div>
             </div>
 
             <div class="p-4 border-t border-slate-800 bg-[#0f172a]">
                 <div class="relative">
-                    <textarea x-model="input" @keydown.enter.prevent="sendMessage()"
-                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:ring-1 focus:ring-pink-500 outline-none resize-none"
-                        rows="3" placeholder="Describe your app, api or table..."></textarea>
-                    <button @click="sendMessage()"
-                        class="absolute bottom-3 right-3 p-1.5 bg-pink-600 hover:bg-pink-500 rounded-lg text-white">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path>
-                        </svg>
+                    <textarea x-ref="chatInput" x-model="input" @keydown.enter.prevent="sendMessage()"
+                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:ring-1 focus:ring-pink-500 outline-none resize-none placeholder-slate-500"
+                        rows="3" placeholder="Describe your requirement..."></textarea>
+                    
+                    <button @click="sendMessage()" class="absolute bottom-3 right-3 p-1.5 bg-pink-600 hover:bg-pink-500 rounded-lg text-white transition-colors">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
                     </button>
                 </div>
             </div>
         </aside>
 
-        <section
-            class="flex-1 bg-[#020617] relative flex flex-col p-6 bg-[url('https://grainy-gradients.vercel.app/noise.svg')]">
-
-            <button x-show="!chatOpen" @click="chatOpen = true"
-                class="absolute top-4 left-4 p-2 bg-slate-800 rounded-lg text-slate-400 hover:text-white z-50">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7">
-                    </path>
-                </svg>
+        <section class="flex-1 bg-[#020617] relative flex flex-col p-6 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] overflow-y-auto">
+            
+            <button x-show="!chatOpen" @click="chatOpen = true" class="absolute top-4 left-4 p-2 bg-slate-800 rounded-lg text-slate-400 hover:text-white z-50">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
             </button>
-
-            <div class="flex justify-center mb-6 z-30">
+            
+            <div class="flex justify-center mb-6 z-30 sticky top-0">
                 <div class="flex bg-slate-900/80 backdrop-blur border border-slate-800 p-1 rounded-xl">
-                    <button @click="canvasMode = 'ui'"
-                        :class="canvasMode === 'ui' ? 'bg-pink-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'"
-                        class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">
-                        🖥️ UI App
-                    </button>
-                    <button @click="canvasMode = 'api'"
-                        :class="canvasMode === 'api' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'"
-                        class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">
-                        🔌 Services
-                    </button>
-                    <button @click="canvasMode = 'data'"
-                        :class="canvasMode === 'data' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'"
-                        class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">
-                        💾 Data Schema
-                    </button>
+                    <button @click="canvasMode = 'ui'" :class="canvasMode === 'ui' ? 'bg-pink-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'" class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">🖥️ UI App</button>
+                    <button @click="canvasMode = 'api'" :class="canvasMode === 'api' ? 'bg-blue-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'" class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">🔌 Services</button>
+                    <button @click="canvasMode = 'data'" :class="canvasMode === 'data' ? 'bg-emerald-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'" class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">💾 Data Schema</button>
                 </div>
             </div>
 
-            <div x-show="canvasMode === 'ui'"
-                class="flex-1 flex flex-col items-center justify-center relative w-full h-full" x-transition>
+            <div x-show="canvasMode === 'ui'" class="flex-1 flex flex-col items-center justify-center relative w-full" x-transition>
+                
                 <div class="absolute top-0 right-0 flex bg-slate-900/80 border border-slate-800 p-1 rounded-lg z-30">
-                    <button @click="viewMode = 'mobile'"
-                        :class="viewMode === 'mobile' ? 'bg-slate-700 text-white' : 'text-slate-400'"
-                        class="px-3 py-1 rounded text-xs">📱</button>
-                    <button @click="viewMode = 'desktop'"
-                        :class="viewMode === 'desktop' ? 'bg-slate-700 text-white' : 'text-slate-400'"
-                        class="px-3 py-1 rounded text-xs">🖥️</button>
+                    <button @click="viewMode = 'mobile'" :class="viewMode === 'mobile' ? 'bg-slate-700 text-white' : 'text-slate-400'" class="px-3 py-1 rounded text-xs">📱</button>
+                    <button @click="viewMode = 'desktop'" :class="viewMode === 'desktop' ? 'bg-slate-700 text-white' : 'text-slate-400'" class="px-3 py-1 rounded text-xs">🖥️</button>
                 </div>
 
-                <div class="relative transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] shadow-2xl overflow-hidden bg-white mt-8"
-                    :class="viewMode === 'mobile' 
-                        ? 'w-[375px] h-[812px] rounded-[3rem] border-[8px] border-slate-900 shadow-2xl' 
-                        : 'w-full h-full rounded-xl border border-slate-700 shadow-xl'">
+                <div class="relative transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] shadow-2xl overflow-hidden bg-white mt-8 mb-8 flex-shrink-0"
+                     :class="viewMode === 'mobile' ? 'w-[375px] h-[812px] rounded-[3rem] border-[8px] border-slate-900 shadow-2xl' : 'w-full h-[800px] rounded-xl border border-slate-700 shadow-xl'">
+                    
+                    <div x-show="viewMode === 'mobile'" class="absolute top-0 left-1/2 transform -translate-x-1/2 w-32 h-7 bg-slate-900 rounded-b-2xl z-20 pointer-events-none"></div>
+                    
+                    <iframe 
+                        :src="currentAppUrl ? currentAppUrl : null" 
+                        :srcdoc="!currentAppUrl && currentDraftHtml ? currentDraftHtml : null"
+                        class="w-full h-full bg-white" 
+                        frameborder="0">
+                    </iframe>
 
-                    <div x-show="viewMode === 'mobile'"
-                        class="absolute top-0 left-1/2 transform -translate-x-1/2 w-32 h-7 bg-slate-900 rounded-b-2xl z-20 pointer-events-none">
-                    </div>
-
-                    <iframe :src="currentAppUrl" class="w-full h-full bg-white" frameborder="0"></iframe>
-
-                    <div x-show="!currentAppUrl"
-                        class="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 text-slate-400">
-                        <p class="text-sm font-medium">No UI Generated yet.</p>
+                    <div x-show="!currentAppUrl && !currentDraftHtml" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 text-slate-400">
+                        <p class="text-sm font-medium">No App Deployed.</p>
+                        <p class="text-xs mt-2">Create one via Chat.</p>
                     </div>
                 </div>
             </div>
@@ -297,105 +367,63 @@
                 <div class="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl">
                     <div class="flex items-center gap-4 mb-6">
                         <div class="p-3 bg-blue-500/10 rounded-lg text-blue-400">
-                            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M13 10V3L4 14h7v7l9-11h-7z"></path>
-                            </svg>
+                            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
                         </div>
                         <div>
                             <h2 class="text-xl font-bold text-white">Generated Service</h2>
                             <p class="text-slate-400 text-sm">RESTful Endpoint on IRIS</p>
                         </div>
                     </div>
-
+                    
                     <div x-show="currentApiUrl">
-                        <div
-                            class="bg-black/50 rounded-lg border border-slate-800 p-4 font-mono text-sm mb-4 flex items-center justify-between">
+                        <div class="bg-black/50 rounded-lg border border-slate-800 p-4 font-mono text-sm mb-4 flex items-center justify-between">
                             <div class="flex items-center gap-3 overflow-hidden">
                                 <span class="text-green-400 font-bold">GET</span>
                                 <span class="text-slate-300 truncate" x-text="currentApiUrl"></span>
                             </div>
-                            <button
-                                class="text-xs bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded text-slate-300">Copy</button>
                         </div>
-                        <div class="grid grid-cols-2 gap-4">
-                            <a :href="currentApiUrl" target="_blank"
-                                class="flex justify-center items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg font-medium transition-colors">
-                                🚀 Test Endpoint
-                            </a>
-                            <button
-                                class="flex justify-center items-center gap-2 border border-slate-700 hover:bg-slate-800 text-slate-300 py-2 rounded-lg font-medium transition-colors">
-                                📄 Open Swagger
-                            </button>
-                        </div>
+                        <a :href="currentApiUrl" target="_blank" class="block text-center bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg font-medium transition-colors">🚀 Test Endpoint</a>
                     </div>
-
+                    
                     <div x-show="!currentApiUrl" class="text-center py-10 text-slate-500">
-                        <p>No API generated in this session.</p>
-                        <p class="text-xs mt-2">Try asking: "Create an API for Patients"</p>
+                        <p>No API generated.</p>
                     </div>
                 </div>
             </div>
 
             <div x-show="canvasMode === 'data'" class="flex-1 flex items-center justify-center w-full" x-transition>
-                <div
-                    class="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
+                <div class="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
                     <div class="bg-slate-800/50 p-6 border-b border-slate-800 flex justify-between items-center">
                         <div class="flex items-center gap-3">
                             <div class="p-2 bg-emerald-500/10 rounded text-emerald-400">
-                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                        d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4">
-                                    </path>
-                                </svg>
+                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
                             </div>
                             <div>
                                 <h3 class="font-bold text-white text-lg">Table Schema</h3>
-                                <p class="text-xs text-emerald-400 font-mono"
-                                    x-text="currentTableName || 'No Table Selected'"></p>
+                                <p class="text-xs text-emerald-400 font-mono" x-text="currentTableName || 'No Table Selected'"></p>
                             </div>
                         </div>
-                        <span
-                            class="text-xs bg-emerald-900 text-emerald-200 px-2 py-1 rounded border border-emerald-800">SQL
-                            / Persistent</span>
+                        <span class="text-xs bg-emerald-900 text-emerald-200 px-2 py-1 rounded border border-emerald-800">SQL / Persistent</span>
                     </div>
-
-                    <div class="p-6">
-                        <div x-show="currentTableName">
-                            <table class="w-full text-left text-sm text-slate-400">
-                                <thead class="border-b border-slate-800 text-slate-200 uppercase text-xs">
-                                    <tr>
-                                        <th class="py-2">Column</th>
-                                        <th class="py-2">Type</th>
-                                        <th class="py-2">Nullable</th>
-                                    </tr>
-                                </thead>
-                                <tbody class="divide-y divide-slate-800">
-                                    <tr>
-                                        <td class="py-3 font-mono text-white">ID</td>
-                                        <td class="py-3 text-purple-400">%Integer</td>
-                                        <td class="py-3 text-red-400">No (PK)</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="py-3 font-mono text-white">Name</td>
-                                        <td class="py-3 text-purple-400">%String</td>
-                                        <td class="py-3 text-green-400">Yes</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="py-3 font-mono text-white">CreatedAt</td>
-                                        <td class="py-3 text-purple-400">%DateTime</td>
-                                        <td class="py-3 text-red-400">No</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                            <div class="mt-4 pt-4 border-t border-slate-800">
-                                <p class="text-xs text-slate-500">Note: Schema visualization is simulated for preview.
-                                </p>
-                            </div>
-                        </div>
-                        <div x-show="!currentTableName" class="text-center py-10 text-slate-500">
-                            <p>No Table generated in this session.</p>
-                        </div>
+                    
+                    <div class="p-6 text-center py-10 text-slate-500" x-show="!currentTableName">
+                         <p>No Table generated.</p>
+                    </div>
+                    
+                    <div class="p-6" x-show="currentTableName">
+                        <table class="w-full text-left text-sm text-slate-400">
+                            <thead class="border-b border-slate-800 text-slate-200 uppercase text-xs">
+                                <tr>
+                                    <th class="py-2">Column</th>
+                                    <th class="py-2">Type</th>
+                                    <th class="py-2">Constraints</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800">
+                                <tr><td class="py-3 font-mono text-white">ID</td><td class="py-3 text-purple-400">%Integer</td><td class="py-3 text-red-400">PK</td></tr>
+                                <tr><td class="py-3 font-mono text-white">...</td><td class="py-3 text-purple-400">...</td><td class="py-3 text-green-400"></td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -403,5 +431,4 @@
         </section>
     </main>
 </body>
-
 </html>
