@@ -35,9 +35,12 @@ Parameter APIPROMPT = {"You are the API Agent. Generate an InterSystems IRIS RES
     "5. ERROR HANDLING: Use '$System.Status.GetErrorText(sc)' to get error messages."_
     "6. HEADERS: Use '%response.SetHeader'. Do NOT use '..SetResponse'."_
     "7. BODY: Read json using '{}.%FromJSON(%request.Content)'."_
-    "8. NO MANUAL IDs: Do not manage IDs or use $increment. Let IRIS handle identity columns."_
-    "9. NO EMBEDDED SQL: Use Object Access (##class(Package).%New(), .%Save()). DO NOT use &sql()."_
-    "10. Output ONLY the ObjectScript code."};
+    "8. ARRAYS: Use command 'Do list.%Push(item)'. CRITICAL: Start line with 'Do', NEVER 'Set' for %Push."_
+    "9. QUERIES: Use '##class(%SQL.Statement).%ExecDirect(,""SELECT * FROM Table"")' to list items. DO NOT use '%Iterate'."_
+    "10. METHODS: Use standard %Persistent methods: %New(), %Save(), %OpenId(id), %DeleteId(id)."_
+    "11. STATUS CODES: Use literals for %response.Status (e.g. ""200 OK""). DO NOT use macros like $$$HTTPStatusOK."_
+    "12. JSON SYNTAX (CRITICAL): ALWAYS create dynamic objects explicitly. Example: `Set err={}`, `Set err.error=msg`, `Write err.%ToJSON()`. DO NOT use inline syntax like `Write {""error"":msg}.%ToJSON()`."_
+    "13. Output ONLY the ObjectScript code."};
 
 Parameter INTEROPPROMPT = {"You are the Interoperability Agent. Generate InterSystems IRIS Interoperability components."_
     "RULES:"_
@@ -53,7 +56,6 @@ Parameter INTEGRATIONPROMPT = {"You are the Integration Agent. Your job is to ex
     "The user will provide FHIR data. You must output ONLY the raw JSON string found."_
     "Do not explain, do not wrap in markdown."};
 
-/// Supervisor: The Router. Now strictly enforced.
 Parameter SUPERVISORPROMPT = {"You are a STRICT Router. You do NOT write code. You only route tasks to workers."_
     "You MUST start your response with a tag like [DELEGATE: ...]."_
     "CONTEXT: {{CONTEXT_DATA}}"_
@@ -75,6 +77,7 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
     Set tResponse = { "type": "text", "content": "" }
     
     Try {
+        // 1. Load Session from Storage or Create New
         Set tSession = ##class(dc.withLove.storage.LLMSession).SessionIdxOpen(pTenantId, pSessionId)
         If '$IsObject(tSession) {
             Set tSession = ##class(dc.withLove.storage.LLMSession).%New()
@@ -82,18 +85,33 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
             Set tSession.TenantId = pTenantId
         }
 
-        // --- HITL PHASE 1: EXECUTION ---
+        // ====================================================
+        // HITL PHASE 1: EXECUTION (APPROVAL)
+        // ====================================================
+        
         If (pUserPrompt = "CONFIRM_APPROVE") && (tSession.CurrentState = "AWAITING_APPROVAL") {
+            
             Set tCode = tSession.DraftCode.Read($$$MaxStringLength)
             Set tType = tSession.DraftType
             Set tDeployResult = ""
 
+            // --- DEPLOY LOGIC ---
             If (tType = "BACKEND") {
                 Set tDeployResult = ##class(dc.withLove.engine.ClassFactory).DeployBackend(tCode, pTenantId)
-                If ($Extract(tDeployResult,1,5) = "ERROR") { Set tResponse.content = "❌ **Deploy Failed:** " _ tDeployResult } Else { Set tResponse.content = "✅ **Deployed!** Table: `" _ tDeployResult _ "` created." }
+                If ($Extract(tDeployResult,1,5) = "ERROR") {
+                     Set tResponse.content = "❌ **Deploy Failed:** " _ tDeployResult
+                } Else {
+                     Set tResponse.content = "✅ **Deployed!** Table: `" _ tDeployResult _ "` created."
+                }
             } ElseIf (tType = "API") {
                 Set tClassName = ##class(dc.withLove.engine.ApiFactory).DeployApi(tCode, pTenantId)
-                If ($Extract(tClassName,1,5) = "ERROR") { Set tResponse.content = "❌ **Deploy Failed:** " _ tClassName } Else { Set tService = $Piece(tClassName, ".", *) Set tUrl = "/withlove/services/" _ pTenantId _ "/" _ tService Set tResponse.content = "✅ **Deployed!** API available at: `" _ tUrl _ "`" }
+                If ($Extract(tClassName,1,5) = "ERROR") {
+                    Set tResponse.content = "❌ **Deploy Failed:** " _ tClassName
+                } Else {
+                    Set tService = $Piece(tClassName, ".", *)
+                    Set tUrl = "/withlove/services/" _ pTenantId _ "/" _ tService
+                    Set tResponse.content = "✅ **Deployed!** API available at: `" _ tUrl _ "`"
+                }
             } ElseIf (tType = "UI") {
                 Set tAppName = "App" _ $Random(100000)
                 Set tUrl = ##class(dc.withLove.engine.AppFactory).CreateApp(pTenantId, tAppName, tCode)
@@ -102,6 +120,8 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
                  Set tClassName = ##class(dc.withLove.engine.InteropFactory).DeployComponent(tCode, pTenantId)
                  Set tResponse.content = "✅ **Deployed!** Interop Component: `" _ tClassName _ "`"
             }
+
+            // Reset State to IDLE
             Do tSession.ClearDraft() 
             Set tResponse.type = "text"
             Do tSession.AddMessage("assistant", tResponse.content)
@@ -110,7 +130,7 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
         
         If (pUserPrompt = "CANCEL_DRAFT") && (tSession.CurrentState = "AWAITING_APPROVAL") {
             Do tSession.ClearDraft()
-            Set tResponse.content = "❌ Draft discarded."
+            Set tResponse.content = "❌ Draft discarded. What should we do next?"
             Set tResponse.type = "text"
             Do tSession.AddMessage("assistant", tResponse.content)
             Return tResponse
@@ -118,17 +138,25 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
 
         If (tSession.CurrentState = "AWAITING_APPROVAL") {
              Set tDraft = tSession.DraftCode.Read($$$MaxStringLength)
-             Set pUserPrompt = "I have this draft code: " _ $C(10) _ tDraft _ $C(10,10) _ "Please apply this change: " _ pUserPrompt
+             Set pUserPrompt = "I have this draft code: " _ $C(10) _ tDraft _ $C(10,10) _ 
+                               "Please apply this change: " _ pUserPrompt
         }
 
-        // --- HITL PHASE 2: GENERATION ---
+        // ====================================================
+        // HITL PHASE 2: GENERATION (DRAFTING)
+        // ====================================================
+        
         Do tSession.AddMessage("user", pUserPrompt)
         
+        // RAG Context Retrieval
         Set tContextString = ""
         Set tUserVector = ..GenerateEmbedding(pUserPrompt)
-        If (tUserVector '= "") { Set tContextString = ..RetrieveContext(pTenantId, tUserVector) }
+        If (tUserVector '= "") {
+            Set tContextString = ..RetrieveContext(pTenantId, tUserVector)
+        }
         If tContextString = "" Set tContextString = "No specific documents found."
 
+        // Supervisor Decision
         Set tSystemPrompt = $Replace(..#SUPERVISORPROMPT, "{{CONTEXT_DATA}}", tContextString)
         Set tDecision = ..PyCallLLM(tSession.GetHistory().%ToJSON(), pApiKey, pModel, tSystemPrompt)
         
@@ -138,27 +166,31 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
         Set tAgentType = ""
         Set tThought = ""
 
-        If (tDecision [ "[DELEGATE: UI]") {
+        If (tDecision [ "[DELEGATE: BACKEND]") {
+            Set tInstructions = $Piece(tDecision, "[DELEGATE: BACKEND]", 2)
+            Set tGenCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#BACKENDPROMPT)
+            Set tAgentType = "BACKEND"
+            Set tThought = "I have generated the SQL Class. Please review before deploying."
+
+        } ElseIf (tDecision [ "[DELEGATE: API]") {
+            Set tInstructions = $Piece(tDecision, "[DELEGATE: API]", 2)
+            Set tGenCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#APIPROMPT)
+            Set tAgentType = "API"
+            Set tThought = "I have generated the REST API. Please review logic and routes."
+
+        } ElseIf (tDecision [ "[DELEGATE: UI]") {
             Set tInstructions = $Piece(tDecision, "[DELEGATE: UI]", 2)
             Set tFullInstructions = "Context: " _ tContextString _ $C(10) _ "Instructions: " _ tInstructions
             Set tGenCode = ..CallWorker(tFullInstructions, pApiKey, pModel, ..#UIPROMPT)
             Set tAgentType = "UI"
             Set tThought = "I have designed the UI. Preview generated."
-        } ElseIf (tDecision [ "[DELEGATE: BACKEND]") {
-            Set tInstructions = $Piece(tDecision, "[DELEGATE: BACKEND]", 2)
-            Set tGenCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#BACKENDPROMPT)
-            Set tAgentType = "BACKEND"
-            Set tThought = "I have generated the SQL Class."
-        } ElseIf (tDecision [ "[DELEGATE: API]") {
-            Set tInstructions = $Piece(tDecision, "[DELEGATE: API]", 2)
-            Set tGenCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#APIPROMPT)
-            Set tAgentType = "API"
-            Set tThought = "I have generated the REST API."
+
         } ElseIf (tDecision [ "[DELEGATE: INTEROP]") {
             Set tInstructions = $Piece(tDecision, "[DELEGATE: INTEROP]", 2)
             Set tGenCode = ..CallWorker(tInstructions, pApiKey, pModel, ..#INTEROPPROMPT)
             Set tAgentType = "INTEROP"
-            Set tThought = "I have generated the Interop Component."
+            Set tThought = "I have generated the DTL/BO. Please review XML/ObjectScript."
+        
         } ElseIf (tDecision [ "[DELEGATE: INTEGRATION]") {
             Set tRawContent = $Piece(tDecision, "[DELEGATE: INTEGRATION]", 2)
             Set tJsonData = ..CallWorker(tRawContent, pApiKey, pModel, ..#INTEGRATIONPROMPT)
@@ -166,18 +198,17 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
             Set tResponse.content = "Integration Result: " _ tResult.status
         }
         
-        // --- FALLBACK ROUTING (Se o LLM falhar em usar a tag, tentamos inferir) ---
+        // --- FALLBACK ROUTING (Security Net) ---
+        // If Supervisor forgot the tag but we detect clear intent
         If (tGenCode = "") && (tDecision '[ "[DELEGATE:") {
             Set tLowerDecision = $ZConvert(tDecision, "L")
             Set tLowerPrompt = $ZConvert(pUserPrompt, "L")
             
-            // Se o usuário pediu UI/Tela/Page mas o LLM só conversou
             If (tLowerPrompt [ "ui") || (tLowerPrompt [ "page") || (tLowerPrompt [ "screen") || (tLowerPrompt [ "frontend") {
                 Set tGenCode = ..CallWorker(pUserPrompt, pApiKey, pModel, ..#UIPROMPT)
                 Set tAgentType = "UI"
                 Set tThought = "I have designed the UI (Fallback)."
             }
-            // Se o usuário pediu API/Rest
             ElseIf (tLowerPrompt [ "api") || (tLowerPrompt [ "rest") || (tLowerPrompt [ "endpoint") {
                 Set tGenCode = ..CallWorker(pUserPrompt, pApiKey, pModel, ..#APIPROMPT)
                 Set tAgentType = "API"
@@ -185,8 +216,10 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
             }
         }
 
-        // --- RESPONSE PACKAGING ---
+        // --- SAVE DRAFT & RETURN REVIEW REQUEST ---
+        
         If (tGenCode '= "") {
+            // Save to Session Memory
             Do tSession.DraftCode.Clear()
             Do tSession.DraftCode.Write(tGenCode)
             Set tSession.DraftType = tAgentType
@@ -195,6 +228,7 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
 
             // --- TYPE DETECTION (Case Insensitive) ---
             Set tLowerCode = $ZConvert(tGenCode, "L")
+            
             If (tLowerCode [ "<!doctype html") || (tLowerCode [ "<html") {
                 Set tResponse.type = "code" // Forces Canvas Preview
                 Set tResponse.thought = "✅ I have generated the App UI."
@@ -203,6 +237,7 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
                 Set tResponse.thought = tThought
             }
             
+            // WRAP IN CDATA for safe transport
             Set tResponse.content = "<![CDATA[" _ $C(10) _ tGenCode _ $C(10) _ "]]>"
             Do tSession.AddMessage("assistant", tResponse.thought)
             
@@ -221,38 +256,55 @@ ClassMethod AgentRun(pSessionId As %String, pTenantId As %String, pUserPrompt As
     Return tResponse
 }
 
-// ... (Métodos Auxiliares mantidos iguais) ...
-
+/// =========================================================
+/// 3. HELPER METHODS & PYTHON BRIDGES
+/// =========================================================
+/// Calls a specific Worker Agent with a defined System Prompt.
 ClassMethod CallWorker(pInstructions As %String, pApiKey As %String, pModel As %String, pSystemPrompt As %String) As %String
 {
     Set tMsgs = [{"role":"system", "content":(pSystemPrompt)}, {"role":"user", "content":(pInstructions)}]
     Set tContent = ..PyCallLLM(tMsgs.%ToJSON(), pApiKey, pModel, "")
-    // Cleanup markdown
+    
+    // Sanitize common markdown artifacts to return clean code/json
     Set tContent = $Replace(tContent, "```html", "")
     Set tContent = $Replace(tContent, "```objectscript", "")
     Set tContent = $Replace(tContent, "```json", "")
     Set tContent = $Replace(tContent, "```", "")
     Set tContent = $ZStrip(tContent, "<>W") 
+    
     Return tContent
 }
 
+/// Internal Python method to call LiteLLM.
+/// Supports OpenAI, Anthropic, and Gemini dynamically.
 ClassMethod PyCallLLM(messagesJson As %String, apiKey As %String, model As %String, systemPrompt As %String = "") As %String [ Language = python ]
 {
     from litellm import completion
     import json
     import os
+    
     try:
-        if "gpt" in model: os.environ["OPENAI_API_KEY"] = apiKey
-        elif "claude" in model: os.environ["ANTHROPIC_API_KEY"] = apiKey
-        elif "gemini" in model: os.environ["GEMINI_API_KEY"] = apiKey
+        if "gpt" in model: 
+            os.environ["OPENAI_API_KEY"] = apiKey
+        elif "claude" in model: 
+            os.environ["ANTHROPIC_API_KEY"] = apiKey
+        elif "gemini" in model: 
+            os.environ["GEMINI_API_KEY"] = apiKey
+            
         msgs = json.loads(messagesJson)
+        
         if systemPrompt and systemPrompt != "":
-            if msgs[0]['role'] != 'system': msgs.insert(0, {"role": "system", "content": systemPrompt})
+            if msgs[0]['role'] != 'system':
+                msgs.insert(0, {"role": "system", "content": systemPrompt})
+        
         response = completion(model=model, messages=msgs)
         return response.choices[0].message.content
-    except Exception as e: return f"Error: {str(e)}"
+
+    except Exception as e:
+        return f"Error: {str(e)}"
 }
 
+/// Generates Vector Embeddings for RAG.
 ClassMethod GenerateEmbedding(pText As %String) As %String [ Language = python ]
 {
     try:
@@ -260,9 +312,12 @@ ClassMethod GenerateEmbedding(pText As %String) As %String [ Language = python ]
         model = SentenceTransformer('all-MiniLM-L6-v2')
         embeddings = model.encode(pText)
         return str(embeddings.tolist())
-    except Exception as e: return ""
+    except Exception as e:
+        print(f"Embedding Error: {e}")
+        return ""
 }
 
+/// Retrieves Context from KnowledgeBase using IRIS Vector Search.
 ClassMethod RetrieveContext(pTenantId As %String, pVectorStr As %String) As %String
 {
     Set tContext = ""
@@ -271,8 +326,14 @@ ClassMethod RetrieveContext(pTenantId As %String, pVectorStr As %String) As %Str
         Set statement = ##class(%SQL.Statement).%New()
         $$$ThrowOnError(statement.%PrepareClassQuery("dc.withLove.storage.KnowledgeBase", "RetrieveContext"))
         Set tRS = statement.%Execute(pTenantId, tVector)
-        While tRS.%Next() { Set tContext = tContext _ "Document: " _ tRS.%Get("Title") _ $C(10) _ "Content: " _ $Extract(tRS.%Get("Content"), 1, 1000) _ "..." _ $C(10,10) }
-    } Catch ex { Set tContext = "Error retrieving context: " _ ex.DisplayString() }
+        
+        While tRS.%Next() {
+            Set tContext = tContext _ "Document: " _ tRS.%Get("Title") _ $C(10) _ 
+                        "Content: " _ $Extract(tRS.%Get("Content"), 1, 1000) _ "..." _ $C(10,10)
+        }
+    } Catch ex {
+        Set tContext = "Error retrieving context: " _ ex.DisplayString()
+    }
     Return tContext
 }
 
