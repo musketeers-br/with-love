@@ -13,56 +13,76 @@
         [x-cloak] { display: none !important; }
         body { font-family: 'Inter', sans-serif; }
         
-        /* Custom Scrollbar for dark theme */
+        /* Custom Scrollbar */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #0f172a; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #475569; }
         
-        /* Code block styling for Chat Bubble */
-        pre { 
-            font-family: 'Menlo', 'Monaco', 'Courier New', monospace; 
-            font-size: 0.85em; 
-            white-space: pre-wrap;       /* Wrap long lines */
-            word-break: break-all;       /* Prevent overflow */
+        /* Code Block */
+        pre { font-family: 'Menlo', 'Monaco', monospace; font-size: 0.85em; white-space: pre-wrap; word-break: break-all; }
+        
+        /* Animation for Highlight */
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(219, 39, 119, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(219, 39, 119, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(219, 39, 119, 0); }
         }
+        .highlight-input { animation: pulse-ring 2s infinite; border-color: #db2777 !important; }
     </style>
 
     <script>
         document.addEventListener('alpine:init', () => {
             Alpine.data('studio', () => ({
-                // --- UI State ---
+                // --- State ---
                 chatOpen: true, 
                 input: '', 
                 messages: [], 
                 loading: false, 
+                canvasMode: 'ui',     
+                viewMode: 'mobile', 
+                showOnboarding: false, // Controls the Modal
+                highlightKey: false,   // Controls the input animation
                 
-                // --- Canvas State ---
-                canvasMode: 'ui',     // Options: 'ui', 'api', 'data'
-                viewMode: 'mobile',   // Options: 'mobile', 'desktop'
-                
-                // --- Artifacts State ---
-                // 'currentAppUrl' is for deployed apps (server URL).
-                // 'currentDraftHtml' is for raw HTML preview (local string).
-                // We initialize with null to avoid empty iframe issues.
+                // --- Artifacts ---
                 currentAppUrl: null,      
                 currentDraftHtml: null,   
                 currentApiUrl: null,
                 currentTableName: null,
                 
-                // --- Authentication & Configuration ---
+                // --- Config ---
                 tenantId: 'hospital-main',
                 apiKey: '',
                 model: 'gpt-4o',
                 
-                /**
-                 * Main function to send user prompt to the Backend Agent.
-                 */
+                init() {
+                    // Check if user has seen onboarding
+                    if (!localStorage.getItem('wls_onboarded_v1')) {
+                        this.showOnboarding = true;
+                    }
+                },
+
+                finishOnboarding() {
+                    this.showOnboarding = false;
+                    this.highlightKey = true; // Highlight the input
+                    localStorage.setItem('wls_onboarded_v1', 'true');
+                    
+                    // Remove highlight after 5 seconds
+                    setTimeout(() => { this.highlightKey = false }, 5000);
+                },
+
                 async sendMessage(manualPrompt = null) {
                     const prompt = manualPrompt || this.input;
                     if (!prompt.trim()) return;
                     
-                    // Add user message to history (unless it's a hidden system command)
+                    // Validar se tem API Key antes de enviar
+                    if (!this.apiKey) {
+                        alert("⚠️ Please enter your API Key first (Top Right corner).");
+                        this.highlightKey = true;
+                        setTimeout(() => { this.highlightKey = false }, 3000);
+                        return;
+                    }
+
                     if (prompt !== 'CONFIRM_APPROVE' && prompt !== 'CANCEL_DRAFT') {
                         this.messages.push({ role: 'user', content: prompt });
                     }
@@ -85,151 +105,79 @@
                             })
                         });
                         const data = await res.json();
-                        
-                        // --- DEBUG: Log the exact response from the backend ---
-                        console.log('🔹 Server Response Payload:', data); 
-
-                        // --- RESPONSE HANDLING ---
+                        console.log('Server Response:', data);
 
                         // CASE 1: Code Generation (UI Draft)
-                        // Backend explicitly flagged content as HTML/UI code
                         if (data.type === 'code') {
-                            console.log('🔸 Action: Handling as CODE (UI Preview Trigger)');
-                            
-                            this.messages.push({ 
-                                role: 'assistant', 
-                                content: data.content, 
-                                isReview: true, 
-                                thought: data.thought || 'Please review the generated code.'
-                            });
-                            
+                            this.messages.push({ role: 'assistant', content: data.content, isReview: true, thought: data.thought });
                             const rawCode = this.extractRawCode(data.content);
-                            console.log('🔸 Extracted Raw HTML:', rawCode ? 'Success (Length: ' + rawCode.length + ')' : 'Failed / Null');
-
                             if (rawCode) {
                                 this.currentDraftHtml = rawCode;
-                                this.currentAppUrl = null; // Clear URL to force srcdoc usage
-                                this.canvasMode = 'ui';    // Switch to UI tab
-                                
-                                // Auto-close chat sidebar on mobile for better view
+                                this.currentAppUrl = null; 
+                                this.canvasMode = 'ui';
                                 if (window.innerWidth < 1000) this.chatOpen = false;
                             }
                         }
-                        // CASE 2: Generic Review (SQL/API)
+                        // CASE 2: Generic Review
                         else if (data.type === 'review') {
-                            console.log('🔸 Action: Handling as REVIEW (Standard Code Review)');
-                            this.messages.push({ 
-                                role: 'assistant', 
-                                content: data.content, 
-                                isReview: true, 
-                                thought: data.thought || 'Please review the generated code.'
-                            });
+                            this.messages.push({ role: 'assistant', content: data.content, isReview: true, thought: data.thought });
                         }
-                        // CASE 3: Deployment Success (After Approval)
+                        // CASE 3: Deployment Success
                         else if (data.content && data.content.includes('✅ **Deployed!**')) {
-                            console.log('🔸 Action: Handling as DEPLOYED (Artifact Created)');
                             this.messages.push({ role: 'assistant', content: data.content });
-                            this.parseArtifacts(data.content); // Extract URL/Table name
-                            this.currentDraftHtml = null;      // Clear draft, now we have a real app
+                            this.parseArtifacts(data.content);
+                            this.currentDraftHtml = null; 
                         }
-                        // CASE 4: Standard Chat Message
+                        // CASE 4: Normal Chat
                         else {
-                            console.log('🔸 Action: Handling as STANDARD TEXT');
                             this.messages.push({ role: 'assistant', content: data.content });
                         }
                         
                     } catch (e) {
-                        console.error('❌ Error in sendMessage:', e);
                         this.messages.push({ role: 'assistant', content: 'Error: ' + e.message });
                     } finally {
                         this.loading = false;
                     }
                 },
 
-                /**
-                 * Helper: Escape HTML characters to display code safely in chat bubbles.
-                 */
-                escapeHtml(unsafe) {
-                    return unsafe
-                        .replace(/&/g, "&amp;")
-                        .replace(/</g, "&lt;")
-                        .replace(/>/g, "&gt;")
-                        .replace(/"/g, "&quot;")
-                        .replace(/'/g, "&#039;");
-                },
-
-                /**
-                 * Helper: Extract raw code from the CDATA block sent by Backend.
-                 */
+                // --- Helpers (escapeHtml, extractRawCode, formatMessage, parseArtifacts) ---
+                escapeHtml(unsafe) { return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); },
+                
                 extractRawCode(content) {
                     if (!content || !content.includes('<![CDATA[')) return null;
-                    // Robust regex to capture everything between CDATA tags
                     const match = content.match(/<!\[CDATA\[([\s\S]*?)\]\]>/);
                     return match ? match[1].trim() : null;
                 },
 
-                /**
-                 * Formatter: Renders the chat message.
-                 * If CDATA is found, it renders a styled Code Block.
-                 * If plain text, it renders text with line breaks.
-                 */
                 formatMessage(content) {
                     if (!content) return '';
-                    
                     if (content.includes('<![CDATA[')) {
                         return content.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, (match, code) => {
                             const safeCode = this.escapeHtml(code);
-                            // Returns a UI card representing the code block
-                            return `<div class="mt-2 mb-2 bg-slate-950 rounded-lg border border-slate-700 overflow-hidden">
-                                      <div class="bg-slate-900 px-3 py-1 text-xs text-slate-500 border-b border-slate-800 font-mono flex justify-between">
-                                        <span>Generated Code</span>
-                                        <span class="text-[10px] uppercase text-emerald-500">Preview Ready</span>
-                                      </div>
-                                      <pre class="p-3 text-xs text-green-400 overflow-x-auto">${safeCode}</pre>
-                                    </div>`;
+                            return `<div class="mt-2 mb-2 bg-slate-950 rounded-lg border border-slate-700 overflow-hidden"><div class="bg-slate-900 px-3 py-1 text-xs text-slate-500 border-b border-slate-800 font-mono flex justify-between"><span>Generated Code</span><span class="text-[10px] uppercase text-emerald-500">Preview</span></div><pre class="p-3 text-xs text-green-400 overflow-x-auto">${safeCode}</pre></div>`;
                         });
                     }
-                    // Default text handling
                     return this.escapeHtml(content).replace(/\n/g, '<br>');
                 },
 
-                /**
-                 * Parser: Detects Deployed Artifacts (URLs, Table names) from Agent text.
-                 */
                 parseArtifacts(text) {
-                    // Detect UI URL
-                    if (text.includes('App URL:')) {
-                        const match = text.match(/App URL:\s*[`*]*([^`*\s]+)[`*]*/);
-                        if (match) { this.currentAppUrl = match[1]; this.canvasMode = 'ui'; }
-                    }
-                    // Detect API Endpoint
-                    if (text.includes('API available at:')) {
-                        const match = text.match(/API available at:\s*[`*]*([^`*\s]+)[`*]*/);
-                        if (match) { this.currentApiUrl = match[1]; this.canvasMode = 'api'; }
-                    }
-                    // Detect SQL Table
-                    if (text.includes('Table:')) {
-                        const match = text.match(/Table:\s*[`*]*([a-zA-Z0-9_.]+)[`*]*/);
-                        if (match) { this.currentTableName = match[1]; this.canvasMode = 'data'; }
-                    }
+                    if (text.includes('App URL:')) { const match = text.match(/App URL:\s*[`*]*([^`*\s]+)[`*]*/); if (match) { this.currentAppUrl = match[1]; this.canvasMode = 'ui'; } }
+                    if (text.includes('API available at:')) { const match = text.match(/API available at:\s*[`*]*([^`*\s]+)[`*]*/); if (match) { this.currentApiUrl = match[1]; this.canvasMode = 'api'; } }
+                    if (text.includes('Table:')) { const match = text.match(/Table:\s*[`*]*([a-zA-Z0-9_.]+)[`*]*/); if (match) { this.currentTableName = match[1]; this.canvasMode = 'data'; } }
                 },
 
-                // --- HITL Actions (Human-in-the-Loop) ---
-
+                // --- HITL Actions ---
                 async approveDraft(msgIndex) {
-                    this.messages[msgIndex].isReview = false; // Hide buttons
-                    this.messages[msgIndex].content += '\n\n✅ [APPROVED by User]';
+                    this.messages[msgIndex].isReview = false;
+                    this.messages[msgIndex].content += '\n\n✅ [APPROVED]';
                     await this.sendMessage('CONFIRM_APPROVE');
                 },
-
                 rejectDraft(msgIndex) {
                     this.messages[msgIndex].isReview = false;
-                    this.messages[msgIndex].content += '\n\n❌ [REJECTED by User]';
+                    this.messages[msgIndex].content += '\n\n❌ [REJECTED]';
                     this.sendMessage('CANCEL_DRAFT');
                 },
-
                 adjustDraft(msgIndex) {
-                    // Focus input for user feedback
                     this.input = 'Change the following: ';
                     this.$refs.chatInput.focus();
                 }
@@ -240,6 +188,47 @@
 
 <body class="bg-[#0f172a] text-slate-300 h-screen flex flex-col overflow-hidden" x-data="studio()">
 
+    <div x-show="showOnboarding" x-transition.opacity class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" x-cloak>
+        <div class="bg-[#1e293b] border border-slate-700 rounded-2xl p-8 max-w-lg shadow-2xl relative">
+            
+            <div class="absolute -top-10 left-1/2 transform -translate-x-1/2 w-20 h-20 bg-pink-600 rounded-full flex items-center justify-center border-8 border-[#0f172a] shadow-lg">
+                <span class="text-3xl">🚀</span>
+            </div>
+
+            <h2 class="text-2xl font-bold text-white text-center mt-8 mb-2">Welcome to withLove Studio</h2>
+            <p class="text-center text-slate-400 text-sm mb-6">Build Healthcare Apps on IRIS using Generative AI.</p>
+
+            <div class="space-y-4">
+                <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex gap-4">
+                    <div class="text-2xl">🔑</div>
+                    <div>
+                        <h3 class="text-white font-semibold text-sm">BYOK (Bring Your Own Key)</h3>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                            We value your security. This application is stateless regarding credentials. 
+                            Your <strong>OpenAI/Gemini API Key</strong> is used strictly for the session and is 
+                            <span class="text-pink-400 font-bold">never persisted</span> in our database.
+                        </p>
+                    </div>
+                </div>
+
+                <div class="bg-slate-900/50 p-4 rounded-xl border border-slate-800 flex gap-4">
+                    <div class="text-2xl">🤖</div>
+                    <div>
+                        <h3 class="text-white font-semibold text-sm">Multi-Agent System</h3>
+                        <p class="text-xs text-slate-400 mt-1 leading-relaxed">
+                            Our agents work together to create <strong>SQL Tables</strong>, 
+                            <strong>REST APIs</strong>, and <strong>User Interfaces</strong> automatically.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <button @click="finishOnboarding()" class="w-full mt-8 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-500 hover:to-purple-500 text-white font-bold py-3 rounded-xl shadow-lg transition-all transform hover:scale-[1.02]">
+                I Understand, Let's Build!
+            </button>
+        </div>
+    </div>
+
     <header class="h-14 border-b border-slate-800 bg-[#0f172a] flex items-center justify-between px-6 z-20">
         <div class="flex items-center gap-3">
             <div class="w-8 h-8 bg-pink-600 rounded-lg flex items-center justify-center font-bold text-white shadow-lg shadow-pink-900/20">W</div>
@@ -248,7 +237,12 @@
         
         <div class="flex items-center gap-3">
             <input type="text" x-model="tenantId" class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 w-24 placeholder-slate-600" title="Tenant ID">
-            <input type="password" x-model="apiKey" class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 w-24" placeholder="API Key...">
+            
+            <input type="password" 
+                   x-model="apiKey" 
+                   :class="highlightKey ? 'highlight-input' : ''"
+                   class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 w-24 transition-all duration-300" 
+                   placeholder="API Key...">
             
             <input type="text" list="model-options" x-model="model" class="bg-slate-900 border border-slate-700 text-xs rounded px-2 py-1 text-slate-300 w-24" placeholder="Model...">
             <datalist id="model-options">
@@ -260,20 +254,12 @@
     </header>
 
     <main class="flex-1 flex overflow-hidden relative">
-        
         <aside class="w-[450px] bg-[#0f172a] flex flex-col border-r border-slate-800 z-10 transition-all duration-300"
                :class="chatOpen ? 'translate-x-0' : '-translate-x-full absolute h-full'">
             
             <div class="flex-1 overflow-y-auto p-4 space-y-4">
-                
                 <div class="bg-slate-800/50 p-4 rounded-xl border border-slate-700">
-                    <div class="flex gap-3 mb-2">
-                        <div class="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center">🤖</div>
-                        <div>
-                            <p class="text-sm text-white font-medium">Full Stack Architect</p>
-                            <p class="text-xs text-slate-400 mt-1">Ready to build secure Health Apps.</p>
-                        </div>
-                    </div>
+                    <p class="text-sm text-white font-medium">🤖 Full Stack Architect</p>
                     <div class="flex flex-wrap gap-2 mt-3">
                         <button @click="input='Create a Patient Check-in UI'; sendMessage()" class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">🖥️ UI</button>
                         <button @click="input='Create a REST API for Patients'; sendMessage()" class="text-[10px] bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-slate-300 border border-slate-600">🔌 API</button>
@@ -282,53 +268,32 @@
 
                 <template x-for="(msg, index) in messages">
                     <div :class="msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
-                        <div :class="msg.role === 'user' ? 'bg-pink-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'"
-                             class="max-w-[95%] rounded-2xl px-4 py-3 text-sm shadow-sm">
-                            
+                        <div :class="msg.role === 'user' ? 'bg-pink-600 text-white' : 'bg-slate-800 text-slate-300 border border-slate-700'" class="max-w-[95%] rounded-2xl px-4 py-3 text-sm shadow-sm">
                             <div class="overflow-x-auto" x-html="formatMessage(msg.content)"></div>
-
                             <div x-show="msg.isReview" class="mt-4 pt-4 border-t border-slate-700">
                                 <p class="text-xs text-slate-400 mb-2 font-bold" x-text="msg.thought"></p>
                                 <div class="flex gap-2">
-                                    <button @click="approveDraft(index)" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2">
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> 
-                                        Approve
-                                    </button>
+                                    <button @click="approveDraft(index)" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-2 rounded-lg text-xs font-bold transition-colors">Approve</button>
                                     <button @click="adjustDraft(index)" class="flex-1 bg-amber-600 hover:bg-amber-500 text-white py-2 rounded-lg text-xs font-bold transition-colors">Adjust</button>
                                     <button @click="rejectDraft(index)" class="flex-1 bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white py-2 rounded-lg text-xs font-bold transition-colors">Reject</button>
                                 </div>
                             </div>
-
                         </div>
                     </div>
                 </template>
-                
-                <div x-show="loading" class="flex justify-start">
-                    <div class="bg-slate-800 text-slate-400 border border-slate-700 rounded-2xl px-4 py-2 text-xs flex items-center gap-2">
-                        <span class="animate-spin">⚙️</span> Thinking...
-                    </div>
-                </div>
+                <div x-show="loading" class="flex justify-start"><div class="bg-slate-800 text-slate-400 border border-slate-700 rounded-2xl px-4 py-2 text-xs flex items-center gap-2"><span class="animate-spin">⚙️</span> Thinking...</div></div>
             </div>
 
             <div class="p-4 border-t border-slate-800 bg-[#0f172a]">
                 <div class="relative">
-                    <textarea x-ref="chatInput" x-model="input" @keydown.enter.prevent="sendMessage()"
-                        class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:ring-1 focus:ring-pink-500 outline-none resize-none placeholder-slate-500"
-                        rows="3" placeholder="Describe your requirement..."></textarea>
-                    
-                    <button @click="sendMessage()" class="absolute bottom-3 right-3 p-1.5 bg-pink-600 hover:bg-pink-500 rounded-lg text-white transition-colors">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
-                    </button>
+                    <textarea x-ref="chatInput" x-model="input" @keydown.enter.prevent="sendMessage()" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white focus:ring-1 focus:ring-pink-500 outline-none resize-none placeholder-slate-500" rows="3" placeholder="Describe requirements..."></textarea>
+                    <button @click="sendMessage()" class="absolute bottom-3 right-3 p-1.5 bg-pink-600 hover:bg-pink-500 rounded-lg text-white transition-colors"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg></button>
                 </div>
             </div>
         </aside>
 
         <section class="flex-1 bg-[#020617] relative flex flex-col p-6 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] overflow-y-auto">
-            
-            <button x-show="!chatOpen" @click="chatOpen = true" class="absolute top-4 left-4 p-2 bg-slate-800 rounded-lg text-slate-400 hover:text-white z-50">
-                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg>
-            </button>
-            
+            <button x-show="!chatOpen" @click="chatOpen = true" class="absolute top-4 left-4 p-2 bg-slate-800 rounded-lg text-slate-400 hover:text-white z-50"><svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"></path></svg></button>
             <div class="flex justify-center mb-6 z-30 sticky top-0">
                 <div class="flex bg-slate-900/80 backdrop-blur border border-slate-800 p-1 rounded-xl">
                     <button @click="canvasMode = 'ui'" :class="canvasMode === 'ui' ? 'bg-pink-600 text-white shadow' : 'text-slate-400 hover:text-slate-200'" class="px-4 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2">🖥️ UI App</button>
@@ -338,96 +303,39 @@
             </div>
 
             <div x-show="canvasMode === 'ui'" class="flex-1 flex flex-col items-center justify-center relative w-full" x-transition>
-                
                 <div class="absolute top-0 right-0 flex bg-slate-900/80 border border-slate-800 p-1 rounded-lg z-30">
                     <button @click="viewMode = 'mobile'" :class="viewMode === 'mobile' ? 'bg-slate-700 text-white' : 'text-slate-400'" class="px-3 py-1 rounded text-xs">📱</button>
                     <button @click="viewMode = 'desktop'" :class="viewMode === 'desktop' ? 'bg-slate-700 text-white' : 'text-slate-400'" class="px-3 py-1 rounded text-xs">🖥️</button>
                 </div>
-
                 <div class="relative transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] shadow-2xl overflow-hidden bg-white mt-8 mb-8 flex-shrink-0"
                      :class="viewMode === 'mobile' ? 'w-[375px] h-[812px] rounded-[3rem] border-[8px] border-slate-900 shadow-2xl' : 'w-full h-[800px] rounded-xl border border-slate-700 shadow-xl'">
-                    
                     <div x-show="viewMode === 'mobile'" class="absolute top-0 left-1/2 transform -translate-x-1/2 w-32 h-7 bg-slate-900 rounded-b-2xl z-20 pointer-events-none"></div>
-                    
-                    <iframe 
-                        :src="currentAppUrl ? currentAppUrl : null" 
-                        :srcdoc="!currentAppUrl && currentDraftHtml ? currentDraftHtml : null"
-                        class="w-full h-full bg-white" 
-                        frameborder="0">
-                    </iframe>
-
-                    <div x-show="!currentAppUrl && !currentDraftHtml" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 text-slate-400">
-                        <p class="text-sm font-medium">No App Deployed.</p>
-                        <p class="text-xs mt-2">Create one via Chat.</p>
-                    </div>
+                    <iframe :src="currentAppUrl ? currentAppUrl : null" :srcdoc="!currentAppUrl && currentDraftHtml ? currentDraftHtml : null" class="w-full h-full bg-white" frameborder="0"></iframe>
+                    <div x-show="!currentAppUrl && !currentDraftHtml" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 text-slate-400"><p class="text-sm font-medium">No App Deployed.</p><p class="text-xs mt-2">Create one via Chat.</p></div>
                 </div>
             </div>
 
             <div x-show="canvasMode === 'api'" class="flex-1 flex items-center justify-center w-full" x-transition>
                 <div class="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl">
-                    <div class="flex items-center gap-4 mb-6">
-                        <div class="p-3 bg-blue-500/10 rounded-lg text-blue-400">
-                            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                        </div>
-                        <div>
-                            <h2 class="text-xl font-bold text-white">Generated Service</h2>
-                            <p class="text-slate-400 text-sm">RESTful Endpoint on IRIS</p>
-                        </div>
-                    </div>
-                    
+                    <div class="flex items-center gap-4 mb-6"><div class="p-3 bg-blue-500/10 rounded-lg text-blue-400"><svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg></div><div><h2 class="text-xl font-bold text-white">Generated Service</h2><p class="text-slate-400 text-sm">RESTful Endpoint on IRIS</p></div></div>
                     <div x-show="currentApiUrl">
-                        <div class="bg-black/50 rounded-lg border border-slate-800 p-4 font-mono text-sm mb-4 flex items-center justify-between">
-                            <div class="flex items-center gap-3 overflow-hidden">
-                                <span class="text-green-400 font-bold">GET</span>
-                                <span class="text-slate-300 truncate" x-text="currentApiUrl"></span>
-                            </div>
-                        </div>
+                        <div class="bg-black/50 rounded-lg border border-slate-800 p-4 font-mono text-sm mb-4 flex items-center justify-between"><div class="flex items-center gap-3 overflow-hidden"><span class="text-green-400 font-bold">GET</span><span class="text-slate-300 truncate" x-text="currentApiUrl"></span></div></div>
                         <a :href="currentApiUrl" target="_blank" class="block text-center bg-blue-600 hover:bg-blue-500 text-white py-2 rounded-lg font-medium transition-colors">🚀 Test Endpoint</a>
                     </div>
-                    
-                    <div x-show="!currentApiUrl" class="text-center py-10 text-slate-500">
-                        <p>No API generated.</p>
-                    </div>
+                    <div x-show="!currentApiUrl" class="text-center py-10 text-slate-500"><p>No API generated.</p></div>
                 </div>
             </div>
 
             <div x-show="canvasMode === 'data'" class="flex-1 flex items-center justify-center w-full" x-transition>
                 <div class="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-2xl">
                     <div class="bg-slate-800/50 p-6 border-b border-slate-800 flex justify-between items-center">
-                        <div class="flex items-center gap-3">
-                            <div class="p-2 bg-emerald-500/10 rounded text-emerald-400">
-                                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg>
-                            </div>
-                            <div>
-                                <h3 class="font-bold text-white text-lg">Table Schema</h3>
-                                <p class="text-xs text-emerald-400 font-mono" x-text="currentTableName || 'No Table Selected'"></p>
-                            </div>
-                        </div>
+                        <div class="flex items-center gap-3"><div class="p-2 bg-emerald-500/10 rounded text-emerald-400"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"></path></svg></div><div><h3 class="font-bold text-white text-lg">Table Schema</h3><p class="text-xs text-emerald-400 font-mono" x-text="currentTableName || 'No Table Selected'"></p></div></div>
                         <span class="text-xs bg-emerald-900 text-emerald-200 px-2 py-1 rounded border border-emerald-800">SQL / Persistent</span>
                     </div>
-                    
-                    <div class="p-6 text-center py-10 text-slate-500" x-show="!currentTableName">
-                         <p>No Table generated.</p>
-                    </div>
-                    
-                    <div class="p-6" x-show="currentTableName">
-                        <table class="w-full text-left text-sm text-slate-400">
-                            <thead class="border-b border-slate-800 text-slate-200 uppercase text-xs">
-                                <tr>
-                                    <th class="py-2">Column</th>
-                                    <th class="py-2">Type</th>
-                                    <th class="py-2">Constraints</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-800">
-                                <tr><td class="py-3 font-mono text-white">ID</td><td class="py-3 text-purple-400">%Integer</td><td class="py-3 text-red-400">PK</td></tr>
-                                <tr><td class="py-3 font-mono text-white">...</td><td class="py-3 text-purple-400">...</td><td class="py-3 text-green-400"></td></tr>
-                            </tbody>
-                        </table>
-                    </div>
+                    <div class="p-6 text-center py-10 text-slate-500" x-show="!currentTableName"><p>No Table generated.</p></div>
+                    <div class="p-6" x-show="currentTableName"><table class="w-full text-left text-sm text-slate-400"><thead class="border-b border-slate-800 text-slate-200 uppercase text-xs"><tr><th class="py-2">Column</th><th class="py-2">Type</th><th class="py-2">Constraints</th></tr></thead><tbody class="divide-y divide-slate-800"><tr><td class="py-3 font-mono text-white">ID</td><td class="py-3 text-purple-400">%Integer</td><td class="py-3 text-red-400">PK</td></tr></tbody></table></div>
                 </div>
             </div>
-
         </section>
     </main>
 </body>
